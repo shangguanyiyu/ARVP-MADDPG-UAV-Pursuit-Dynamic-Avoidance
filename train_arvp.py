@@ -93,7 +93,7 @@ if __name__ == '__main__':
     window_size = 100
     success_evaluator_each = []
     print(chkpt_dir)
-    # maddpg_agents.load_checkpoint()
+    maddpg_agents.load_checkpoint()
     if evaluate:
         maddpg_agents.load_checkpoint()
         print('----  evaluating  ----')
