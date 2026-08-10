@@ -35,7 +35,7 @@ if __name__ == '__main__':
     critic_dims = sum(actor_dims)
 
     # action space is a list of arrays, assume each agent has same action space
-    n_actions = 2
+    n_actions = 3  # 3D actions (ax, ay, az)
     maddpg_agents = MADDPG(actor_dims, critic_dims, n_agents, n_actions, 
                            fc1=128, fc2=128,
                            alpha=0.00001, beta=0.02, scenario='UAV_Round_up',
@@ -76,7 +76,7 @@ if __name__ == '__main__':
                     save_image(env_render, filename)
                 # time.sleep(0.01)
             actions = maddpg_agents.choose_action(obs,total_steps,evaluate)
-            obs_, rewards, dones = env.step(actions)
+            obs_, rewards, dones, _ = env.step(actions)  # env returns 4-tuple in 3D version
 
             state = obs_list_to_state_vector(obs)
             state_ = obs_list_to_state_vector(obs_)

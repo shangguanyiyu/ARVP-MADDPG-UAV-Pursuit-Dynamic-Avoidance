@@ -41,17 +41,23 @@ class MADDPG:
         if not memory.ready():
             return
 
-        # actor_states, states, actions, rewards, \
-        # actor_new_states, states_, dones = memory.sample_buffer()
-
-
-        # 从经验回放中采样
-        actor_states, states, actions, rewards, \
-            actor_new_states, states_, dones, indices, ISWeights = memory.sample_buffer(
-            [agent.critic if idx < len(self.agents) - 1 else agent.target_critic
-             for idx, agent in enumerate(self.agents)],  # 前 N-1 个使用 critic，最后一个使用 target_critic
-            gamma=self.agents[0].gamma  # 假设所有智能体共享相同的 gamma
-        )
+        # Support both plain buffer (MultiAgentReplayBuffer) and PER buffer:
+        # Plain buffer returns 7-tuple (no indices/ISWeights), no positional args.
+        # PER buffer expects critics list + gamma, returns 9-tuple.
+        try:
+            actor_states, states, actions, rewards, \
+                actor_new_states, states_, dones, indices, ISWeights = memory.sample_buffer(
+                [agent.critic if idx < len(self.agents) - 1 else agent.target_critic
+                 for idx, agent in enumerate(self.agents)],
+                gamma=self.agents[0].gamma
+            )
+            is_per = True
+        except (TypeError, ValueError):
+            # Fallback: plain MultiAgentReplayBuffer (7-tuple, no args)
+            actor_states, states, actions, rewards, \
+                actor_new_states, states_, dones = memory.sample_buffer()
+            indices, ISWeights = None, None
+            is_per = False
 
         device = self.agents[0].actor.device
 
