@@ -83,7 +83,7 @@ if __name__ == '__main__':
                         n_actions, n_agents, batch_size=256)
 
     BATCH_SIZE = 100  # 每个 batch 包含的回合数
-    N_GAMES = 6000
+    N_GAMES = 5000
     MAX_STEPS = 110
     total_steps = 0
     score_history = []
@@ -93,7 +93,7 @@ if __name__ == '__main__':
     window_size = 100
     success_evaluator_each = []
     print(chkpt_dir)
-    maddpg_agents.load_checkpoint()
+    # maddpg_agents.load_checkpoint()
     if evaluate:
         maddpg_agents.load_checkpoint()
         print('----  evaluating  ----')
