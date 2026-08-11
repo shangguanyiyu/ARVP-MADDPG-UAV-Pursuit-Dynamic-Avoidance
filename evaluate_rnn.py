@@ -1,5 +1,5 @@
-from maddpg_lstm_pre import MADDPGWithAttentionLSTMPRE
-from sim_env_rvo import UAVEnv
+from model.maddpg_att_lstm_pre import MADDPGWithAttentionLSTMPRE
+from env.sim_env_rvo import UAVEnv
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
@@ -16,10 +16,10 @@ def moving_average(data, window_size=5):
     return np.convolve(data, np.ones(window_size) / window_size, mode='valid')
 
 
-def plot_velocities(velocities_magnitude, velocities_x, velocities_y):
+def plot_velocities(velocities_magnitude, velocities_x, velocities_y, velocities_z):
     """绘制速度信息"""
     time_steps = range(len(velocities_magnitude[0]))
-    fig, axs = plt.subplots(3, 1, figsize=(10, 10))
+    fig, axs = plt.subplots(4, 1, figsize=(10, 12))
 
     for i in range(len(velocities_magnitude)):
         axs[0].plot(time_steps, velocities_magnitude[i], label=f'UAV {i}')
@@ -42,6 +42,13 @@ def plot_velocities(velocities_magnitude, velocities_x, velocities_y):
     axs[2].set_ylabel('Velocity Y Component')
     axs[2].legend()
 
+    for i in range(len(velocities_z)):
+        axs[3].plot(time_steps, velocities_z[i], label=f'UAV {i}')
+    axs[3].set_title('Velocity Z Component vs Time')
+    axs[3].set_xlabel('Time Step')
+    axs[3].set_ylabel('Velocity Z Component')
+    axs[3].legend()
+
     plt.tight_layout()
     plt.show()
 
@@ -56,28 +63,36 @@ if __name__ == '__main__':
     # 初始化环境和模型
     env = UAVEnv()
     n_agents = env.num_agents
-    n_actions = 2
+    n_actions = 3  # 3D actions (ax, ay, az)
     actor_dims = []
     lstm_hidden_dim = 256
 
     velocities_magnitude = [[] for _ in range(env.num_agents)]  # 记录速度大小
     velocities_x = [[] for _ in range(env.num_agents)]  # 记录速度 x 分量
     velocities_y = [[] for _ in range(env.num_agents)]  # 记录速度 y 分量
+    velocities_z = [[] for _ in range(env.num_agents)]  # 记录速度 z 分量
     trajectories = [[] for _ in range(env.num_agents)]  # 每个无人机的轨迹
     collisions_record = [[] for _ in range(env.num_agents)]  # 每个无人机的碰撞记录
 
     for agent_id in env.observation_space.keys():
         actor_dims.append(env.observation_space[agent_id].shape[0])
     critic_dims = sum(actor_dims)
+    # 3D observation dims: hunter=47, target=41 (derived from env.observation_space)
+    obs_agt = actor_dims[0]
+    obs_tar = actor_dims[-1]
 
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
     # 初始化模型
     maddpg_agents = MADDPGWithAttentionLSTMPRE(actor_dims, critic_dims, n_agents, n_actions,
+                                            act_dim=n_actions, obs_agt=obs_agt, obs_tar=obs_tar,
                                             fc1=128, fc2=128, lstm_hidden_dim=lstm_hidden_dim,
                                             alpha=0.0001, beta=0.001, scenario='UAV_Round_up',
                                             chkpt_dir='tmp_test/maddpgwithatt/')
-    maddpg_agents.load_checkpoint()
+    try:
+        maddpg_agents.load_checkpoint()
+    except Exception as e:
+        print(f'[warn] load_checkpoint skipped (no/incompatible checkpoint): {e}')
     print('---- Evaluating ----')
 
 
@@ -86,7 +101,7 @@ if __name__ == '__main__':
 
     def update(frame):
         """更新动画帧"""
-        global obs, hidden_state_actor, velocities_magnitude, velocities_x, velocities_y
+        global obs, hidden_state_actor, velocities_magnitude, velocities_x, velocities_y, velocities_z
         global trajectories, collisions_record, total_steps
 
         # 选择动作并与环境交互
@@ -102,11 +117,12 @@ if __name__ == '__main__':
 
             # 记录速度信息
             vel = env.multi_current_vel[i]
-            v_x, v_y = vel
+            v_x, v_y, v_z = vel[:3]
             speed = np.linalg.norm(vel)
             velocities_magnitude[i].append(speed)
             velocities_x[i].append(v_x)
             velocities_y[i].append(v_y)
+            velocities_z[i].append(v_z)
 
         # 渲染动画帧
         env.render_anime(frame)
@@ -130,7 +146,8 @@ if __name__ == '__main__':
             smoothed_velocities_magnitude = [moving_average(v, window_size=5) for v in velocities_magnitude]
             smoothed_velocities_x = [moving_average(v, window_size=5) for v in velocities_x]
             smoothed_velocities_y = [moving_average(v, window_size=5) for v in velocities_y]
-            plot_velocities(smoothed_velocities_magnitude, smoothed_velocities_x, smoothed_velocities_y)
+            smoothed_velocities_z = [moving_average(v, window_size=5) for v in velocities_z]
+            plot_velocities(smoothed_velocities_magnitude, smoothed_velocities_x, smoothed_velocities_y, smoothed_velocities_z)
 
         total_steps += 1
         return []

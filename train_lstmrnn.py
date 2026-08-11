@@ -61,11 +61,15 @@ if __name__ == '__main__':
     for agent_id in env.observation_space.keys():
         actor_dims.append(env.observation_space[agent_id].shape[0])
     critic_dims = sum(actor_dims)
+    # 3D observation dims: hunter=47, target=41 (derived from env.observation_space)
+    obs_agt = actor_dims[0]
+    obs_tar = actor_dims[-1]
 
-    n_actions = 2
+    n_actions = 3  # 3D actions (ax, ay, az)
     lstm_hidden_dim =256
     lstm_num_layers = 4
     maddpg_agents = MADDPGWithAttentionLSTMPRE(actor_dims, critic_dims, n_agents, n_actions,
+                           act_dim=n_actions, obs_agt=obs_agt, obs_tar=obs_tar,
                            fc1=128, fc2=128, lstm_hidden_dim=lstm_hidden_dim,
                            alpha=0.01, beta=0.01, scenario='UAV_Round_up', chkpt_dir='tmp_test/maddpgwithatt/', num_layers=lstm_num_layers) # alpha=0.00001, beta=0.00005
 
@@ -91,7 +95,10 @@ if __name__ == '__main__':
     success_evaluator_each = []
     # maddpg_agents.load_checkpoint()
     if evaluate:
-        maddpg_agents.load_checkpoint()
+        try:
+            maddpg_agents.load_checkpoint()
+        except Exception as e:
+            print(f'[warn] load_checkpoint skipped (no/incompatible checkpoint): {e}')
         print('----  evaluating  ----')
     else:
         print('----training start----')
