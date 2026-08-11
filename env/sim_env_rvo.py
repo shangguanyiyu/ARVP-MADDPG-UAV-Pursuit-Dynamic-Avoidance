@@ -519,19 +519,31 @@ class UAVEnv:
         rewards = [0] * len(X)  # Initialize rewards for all robots
 
         for i in range(len(X)):
-            pA = [X[i][0], X[i][1]]  # Current robot position
-            vA = [V_current[i][0], V_current[i][1]]  # Current robot velocity
+            # 3D adaptation: use full 3D positions/velocities for distance,
+            # but compute VO cone in XY plane (VO is inherently 2D directional).
+            # If z-difference is large, VO penalty is reduced (agent is safely
+            # separated in altitude).
+            pA_3d = np.array(X[i])
+            vA_3d = np.array(V_current[i])
+            pA = [pA_3d[0], pA_3d[1]]  # XY projection for VO cone
+            vA = [vA_3d[0], vA_3d[1]]  # XY projection for VO cone
             RVO_BA_all = []
 
             # Compute RVO regions for other robots
             for j in range(len(X)):
                 if i != j:
-                    pB = [X[j][0], X[j][1]]
-                    vB = [V_current[j][0], V_current[j][1]]
+                    pB_3d = np.array(X[j])
+                    vB_3d = np.array(V_current[j])
+                    pB = [pB_3d[0], pB_3d[1]]
+                    vB = [vB_3d[0], vB_3d[1]]
+
+                    # 3D distance for threshold check
+                    dist_BA_3d = np.linalg.norm(pA_3d - pB_3d)
+                    # XY-plane distance for VO cone geometry
+                    dist_BA = distance(pA, pB)
 
                     # Compute translational velocity and VO bounds
                     transl_vB_vA = [pA[0] + 0.5 * (vB[0] + vA[0]), pA[1] + 0.5 * (vB[1] + vA[1])]
-                    dist_BA = distance(pA, pB)
                     theta_BA = atan2(pB[1] - pA[1], pB[0] - pA[0])
 
                     if 2 * ROB_RAD > dist_BA:
@@ -543,19 +555,24 @@ class UAVEnv:
                     bound_left = [cos(theta_ort_left), sin(theta_ort_left)]
                     bound_right = [cos(theta_ort_right), sin(theta_ort_right)]
 
-                    RVO_BA = [transl_vB_vA, bound_left, bound_right, dist_BA, 2 * ROB_RAD]
+                    RVO_BA = [transl_vB_vA, bound_left, bound_right, dist_BA_3d, 2 * ROB_RAD]
                     RVO_BA_all.append(RVO_BA)
 
             # Compute RVO regions for all circular obstacles
             for obs_idx, obstacle in enumerate(ws_model['circular_obstacles']):
-                pB = obstacle['position']  # 障碍物位置
-                vB = self.obs_vel[obs_idx]  # 获取对应障碍物的速度
-                # print("obs idx=", obs_idx, "VB=", vB)
+                pB_3d = np.array(obstacle['position'])  # 3D obstacle position
+                vB_3d = np.array(self.obs_vel[obs_idx])  # 3D obstacle velocity
+                pB = [pB_3d[0], pB_3d[1]]  # XY projection for VO cone
+                vB = [vB_3d[0], vB_3d[1]]
                 radius = obstacle['radius']  # 障碍物半径
+
+                # 3D distance for threshold check
+                dist_BA_3d = np.linalg.norm(pA_3d - pB_3d)
+                # XY-plane distance for VO cone geometry
+                dist_BA = distance(pA, pB)
 
                 # Compute translational velocity and VO bounds
                 transl_vB_vA = [pA[0] + vB[0], pA[1] + vB[1]]
-                dist_BA = distance(pA, pB)
                 theta_BA = atan2(pB[1] - pA[1], pB[0] - pA[0])
 
                 OVER_APPROX_C2S = 1.3
@@ -570,7 +587,7 @@ class UAVEnv:
                 bound_left = [cos(theta_ort_left), sin(theta_ort_left)]
                 bound_right = [cos(theta_ort_right), sin(theta_ort_right)]
 
-                RVO_BA = [transl_vB_vA, bound_left, bound_right, dist_BA, rad + ROB_RAD]
+                RVO_BA = [transl_vB_vA, bound_left, bound_right, dist_BA_3d, rad + ROB_RAD]
                 RVO_BA_all.append(RVO_BA)
 
             # Check if current velocity is in VO region and distance to obstacle
@@ -904,17 +921,25 @@ class UAVEnv:
 
         for i in range(len(X)):
             # 3D position/velocity to match 3D obstacles
-            pA = [X[i][0], X[i][1], X[i][2]]
-            vA = [V_current[i][0], V_current[i][1], V_current[i][2]]
+            pA_3d = np.array(X[i])
+            vA_3d = np.array(V_current[i])
+            pA = [pA_3d[0], pA_3d[1]]  # XY projection for VO cone
+            vA = [vA_3d[0], vA_3d[1]]  # XY projection for VO cone
             RVO_BA_all = []
 
             for obs_idx, obstacle in enumerate(ws_model['circular_obstacles']):
-                pB = obstacle['position']
-                vB = self.obs_vel[obs_idx]
+                pB_3d = np.array(obstacle['position'])
+                vB_3d = np.array(self.obs_vel[obs_idx])
+                pB = [pB_3d[0], pB_3d[1]]
+                vB = [vB_3d[0], vB_3d[1]]
                 radius = obstacle['radius']
 
-                transl_vB_vA = [pA[0] + vB[0], pA[1] + vB[1]]
+                # 3D distance for threshold and TTC
+                dist_BA_3d = np.linalg.norm(pA_3d - pB_3d)
+                # XY-plane distance for VO cone geometry
                 dist_BA = distance(pA, pB)
+
+                transl_vB_vA = [pA[0] + vB[0], pA[1] + vB[1]]
                 theta_BA = atan2(pB[1] - pA[1], pB[0] - pA[0])
 
                 OVER_APPROX_C2S = 1.3
@@ -930,7 +955,7 @@ class UAVEnv:
                 bound_left = [cos(theta_ort_left), sin(theta_ort_left)]
                 bound_right = [cos(theta_ort_right), sin(theta_ort_right)]
 
-                RVO_BA = [transl_vB_vA, bound_left, bound_right, dist_BA, rad + ROB_RAD]
+                RVO_BA = [transl_vB_vA, bound_left, bound_right, dist_BA_3d, rad + ROB_RAD]
                 RVO_BA_all.append(RVO_BA)
 
             for RVO_BA in RVO_BA_all:
@@ -952,7 +977,8 @@ class UAVEnv:
                 if angle_diff > np.pi:
                     angle_diff = 2 * np.pi - angle_diff
 
-                expected_collision_time = self.calculate_expected_collision_time(pA, vA, pB, vB, ROB_RAD + rad)
+                expected_collision_time = self.calculate_expected_collision_time(
+                    pA_3d, vA_3d, pB_3d, vB_3d, ROB_RAD + rad)
                 # print(expected_collision_time)
                 if in_between(theta_right, theta_dif, theta_left):
                     if expected_collision_time > 0.1:
@@ -961,7 +987,7 @@ class UAVEnv:
                         rewards[i] -= e * (expected_collision_time + f) ** -1
                 else:
                     if expected_collision_time > 4:
-                        rewards[i] = a-b*np.linalg.norm(V_current[i] - np.array([0.1, 0.1, 0.1]))
+                        rewards[i] = a - b * np.linalg.norm(vA_3d - np.array([0.1, 0.1, 0.1]))
 
         return rewards
 
