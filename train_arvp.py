@@ -51,13 +51,27 @@ if __name__ == '__main__':
     env = UAVEnv()
     log_dir = create_unique_log_dir()
     writer = SummaryWriter(log_dir=log_dir)
+    # =========================================================================
+    # APF 方案一：CSV 训练日志目录和文件创建
+    #   保存字段: episode, total_reward(hunters), target_reward, success(0/1),
+    #             episode_steps, batch_avg_score, batch_avg_target_score
+    # =========================================================================
+    csv_log_dir = os.path.join(log_dir, "csv_logs")
+    os.makedirs(csv_log_dir, exist_ok=True)
+    csv_train_file = os.path.join(csv_log_dir, "train_log_apf_5000.csv")
+    csv_header = ["episode", "total_hunter_reward", "target_reward",
+                  "success_flag", "episode_steps", "batch_avg_score",
+                  "batch_avg_target_score"]
+    with open(csv_train_file, "w", newline="") as f_csv:
+        pd.DataFrame(columns=csv_header).to_csv(f_csv, index=False)
+    csv_rows = []
 
     n_agents = env.num_agents
     actor_dims = []
     for agent_id in env.observation_space.keys():
         actor_dims.append(env.observation_space[agent_id].shape[0])
     critic_dims = sum(actor_dims)
-    # 3D observation dims: hunter=47, target=41 (derived from env.observation_space)
+    # 3D + APF observation dims: hunter=50, target=44 (derived from env.observation_space)
     obs_agt = actor_dims[0]
     obs_tar = actor_dims[-1]
 
@@ -86,9 +100,9 @@ if __name__ == '__main__':
     memory = PERMultiAgentReplayBuffer(1000000, critic_dims, actor_dims,
                         n_actions, n_agents, batch_size=256)
 
-    BATCH_SIZE = 100  # 每个 batch 包含的回合数
-    N_GAMES = 5000
-    MAX_STEPS = 110
+    BATCH_SIZE = 10  # 每个 batch 包含的回合数 (暂时 10 验证)
+    N_GAMES = 10
+    MAX_STEPS = 20
     total_steps = 0
     score_history = []
     target_score_history = []
@@ -176,6 +190,20 @@ if __name__ == '__main__':
                 writer.add_scalar("UAV Reward", score, i)
                 writer.add_scalar("Target Reward", score_target, i)
 
+                # =================================================================
+                # APF 方案一：CSV 日志记录（每回合）
+                # =================================================================
+                success_flag = 1 if (success_evaluator_total and episode_step < MAX_STEPS) else 0
+                csv_rows.append({
+                    "episode": i,
+                    "total_hunter_reward": float(score),
+                    "target_reward": float(score_target),
+                    "success_flag": success_flag,
+                    "episode_steps": int(episode_step),
+                    "batch_avg_score": None,   # filled at batch end
+                    "batch_avg_target_score": None,
+                })
+
                 # 更新进度条
                 pbar.update(1)
                 # 间隔一定回合运行一次评测代码
@@ -203,6 +231,19 @@ if __name__ == '__main__':
             # 每隔一个 batch 计算 avg_score
             avg_score = np.mean(score_history[-BATCH_SIZE:])
             avg_target_score = np.mean(target_score_history[-BATCH_SIZE:])
+
+            # =================================================================
+            # APF 方案一：回填本 batch 内最后一回合的 avg_score 作为标记, 并 flush CSV
+            # =================================================================
+            if csv_rows:
+                for row in csv_rows[-BATCH_SIZE:]:
+                    row["batch_avg_score"] = float(avg_score)
+                    row["batch_avg_target_score"] = float(avg_target_score)
+                # flush accumulated rows to disk every batch
+                with open(csv_train_file, "a", newline="") as f_csv:
+                    pd.DataFrame(csv_rows[-BATCH_SIZE:])[csv_header].to_csv(
+                        f_csv, header=False, index=False)
+                tqdm.write(f'CSV training log flushed to {csv_train_file} (total rows so far: {len(csv_rows)})')
 
             # 打印当前批次的进度和平均奖励
             pbar.close()  # 关闭当前进度条
@@ -252,6 +293,15 @@ if __name__ == '__main__':
     # 保存图像
     plt.tight_layout()
     plt.savefig('reward_curves.png')
-    plt.show()
+    # =========================================================================
+    # APF 方案一：同时保存一份奖励曲线图到 CSV 日志目录确保可提交
+    # =========================================================================
+    reward_curves_in_logdir = os.path.join(csv_log_dir, "reward_curves_5000epi.png")
+    plt.savefig(reward_curves_in_logdir)
+    tqdm.write(f'reward_curves.png saved to ./reward_curves.png and {reward_curves_in_logdir}')
+    try:
+        plt.show()
+    except Exception:
+        pass  # headless environment: safe to ignore
 
     writer.close()

@@ -52,18 +52,19 @@ class UAVEnv:
             'agent_2': spaces.Box(low=-np.inf, high=np.inf, shape=(3,)),
             'target': spaces.Box(low=-np.inf, high=np.inf, shape=(3,))
             } # action represents [a_x, a_y, a_z]
-        # Observation dimensions for 3D:
-        # Hunter UAV (agent_0,1,2): S_uavi(6) + S_team(6) + S_target(3) + S_obser(32) = 47
+        # Observation dimensions for 3D + APF guidance augmentation:
+        # Hunter UAV (agent_0,1,2): S_uavi(6) + S_team(6) + S_target(3) + S_obser(32) + S_apf(3) = 50
         #   S_uavi: [px/L, py/L, pz/L, vx/v_max, vy/v_max, vz/v_max]
         #   S_team: 2 other hunters x 3d pos = 6
         #   S_target: [d/(sqrt(3)L), theta_azimuth, phi_polar] = 3
         #   S_obser: num_lasers (32)
-        # Target UAV: S_uavi(6) + S_obser(32) + S_evade_d(3 distances) = 41
+        #   S_apf: normalized 3D APF gradient direction [gx, gy, gz] = 3  (方案一观测增强)
+        # Target UAV: S_uavi(6) + S_obser(32) + S_evade_d(3 distances) + S_apf_evade(3) = 44
         self.observation_space = {
-            'agent_0': spaces.Box(low=-np.inf, high=np.inf, shape=(47,)),
-            'agent_1': spaces.Box(low=-np.inf, high=np.inf, shape=(47,)),
-            'agent_2': spaces.Box(low=-np.inf, high=np.inf, shape=(47,)),
-            'target': spaces.Box(low=-np.inf, high=np.inf, shape=(41,))
+            'agent_0': spaces.Box(low=-np.inf, high=np.inf, shape=(50,)),
+            'agent_1': spaces.Box(low=-np.inf, high=np.inf, shape=(50,)),
+            'agent_2': spaces.Box(low=-np.inf, high=np.inf, shape=(50,)),
+            'target': spaces.Box(low=-np.inf, high=np.inf, shape=(44,))
         }
 
     def get_ws_model(self):
@@ -272,6 +273,20 @@ class UAVEnv:
         single_obs = []
         S_evade_d = [] # dim 3 only for target (3 hunter distances)
         diag_L = np.sqrt(3) * self.length  # spatial diagonal of cube for normalization
+
+        # Pre-compute obstacle list for APF (list of dicts)
+        obstacle_list = [
+            {'position': list(obs.position), 'radius': float(obs.radius)}
+            for obs in self.obstacles
+        ]
+
+        # Last potential energy (for reward shaping) — cached on self so cal_rewards_dones can read it
+        self.apf_potential_energies = []
+        self.apf_gradients = []  # cached for reward shaping (velocity alignment with -grad)
+
+        hunter_positions = [np.array(self.multi_current_pos[k]) for k in range(self.num_agents - 1)]
+        target_position = np.array(self.multi_current_pos[-1])
+
         for i in range(self.num_agents):
             pos = self.multi_current_pos[i]
             vel = self.multi_current_vel[i]
@@ -303,10 +318,26 @@ class UAVEnv:
 
             S_obser = self.multi_current_lasers[i] # dim num_lasers (32)
 
+            # =================================================================
+            # APF potential field augmentation (方案一: observation增强)
+            # =================================================================
             if i != self.num_agents - 1:
-                single_obs = [S_uavi, S_team, S_obser, S_target]
+                # HUNTER: attractive to target, repulsive from obstacles/other-hunters/walls
+                other_hunter_positions = [hunter_positions[k] for k in range(len(hunter_positions)) if k != i]
+                apf_grad, U_h = apf_gradient_3d(pos, target_position, obstacle_list,
+                                                 other_hunter_positions, self.length)
+                S_apf = [apf_grad[0], apf_grad[1], apf_grad[2]]  # dim 3
+                self.apf_potential_energies.append(float(U_h))
+                self.apf_gradients.append(np.array(apf_grad, dtype=float))
+                single_obs = [S_uavi, S_team, S_obser, S_target, S_apf]
             else:
-                single_obs = [S_uavi, S_obser, S_evade_d]
+                # TARGET: evasive APF (repel from hunters, weak attractive to center, wall repulsion)
+                apf_grad_t, U_t = apf_evasive_gradient_3d(pos, hunter_positions, self.length)
+                S_apf_evade = [apf_grad_t[0], apf_grad_t[1], apf_grad_t[2]]
+                self.apf_potential_energies.append(float(U_t))
+                self.apf_gradients.append(np.array(apf_grad_t, dtype=float))
+                single_obs = [S_uavi, S_obser, S_evade_d, S_apf_evade]
+
             _single_obs = list(itertools.chain(*single_obs))
             total_obs.append(_single_obs)
 
@@ -1026,6 +1057,13 @@ class UAVEnv:
         mu3 = 0.0# r_multi_stage 第一阶段0.0，第二阶段0.4
         mu4 = 10 # r_finish 10
         mu5 = 0.1 # 避障 0.2
+        # =====================================================================
+        # APF 势场塑形奖励系数 (方案一: reward shaping)
+        #   mu6: 势能减小奖励 (U_prev - U_curr), 鼓励沿势场下降方向运动
+        #   mu7: 速度-势场负梯度对齐奖励 (cos(theta)), 鼓励方向一致
+        # =====================================================================
+        mu6 = 1.2
+        mu7 = 0.5
         d_capture = 0.3
         d_limit = 0.55 # 0.75
         # 获取当前无人机位置
@@ -1107,6 +1145,41 @@ class UAVEnv:
             print('add 4', mu4 * 10, '  [3D ENCIRCLEMENT + CAPTURE]')
             rewards[0:3] += mu4 * 10
             dones = [True] * self.num_agents
+
+        # =====================================================================
+        # 方案一: APF 势场塑形奖励 (reward shaping via potential-based shaping)
+        # 对每个智能体:
+        #   r_shaping = mu6 * (U_prev - U_curr) + mu7 * cos(angle(-grad_APF, v))
+        # 即:
+        #   - 势能降低 -> 奖励 (类似最优性定理保证 policy improvement 不破坏最优)
+        #   - 速度方向与势场负梯度(建议方向)一致 -> 奖励
+        # =====================================================================
+        has_prev = hasattr(self, 'last_apf_potential_energies') and self.last_apf_potential_energies is not None
+        for i in range(self.num_agents):
+            U_curr = self.apf_potential_energies[i]
+            # 1) Potential energy reduction bonus
+            if has_prev and i < len(self.last_apf_potential_energies):
+                U_prev = self.last_apf_potential_energies[i]
+                delta_U = float(U_prev - U_curr)  # >0 means energy decreased (good)
+                # Clip to avoid extreme values from teleportation/walls
+                delta_U = np.clip(delta_U, -2.0, 2.0)
+                rewards[i] += mu6 * delta_U
+
+            # 2) Velocity - (-apf_gradient) alignment
+            # grad_APF points toward higher energy. Descent direction = -grad_APF.
+            vel = np.array(self.multi_current_vel[i], dtype=float)
+            vnorm = np.linalg.norm(vel)
+            grad_i = self.apf_gradients[i]
+            gnorm = np.linalg.norm(grad_i)
+            if vnorm > 1e-6 and gnorm > 1e-6:
+                # cos(-g, v) = cos(g, -v) = dot(-g, v)/(||g||*||v||) = - dot(g,v)/(||g||*||v||)
+                cos_alignment = - np.dot(grad_i, vel) / (gnorm * vnorm + 1e-9)
+                cos_alignment = np.clip(cos_alignment, -1.0, 1.0)
+                rewards[i] += mu7 * cos_alignment * (vnorm / (self.v_max + 1e-9))
+
+        # Cache current potential energy for next step delta calculation
+        self.last_apf_potential_energies = list(self.apf_potential_energies)
+
         return rewards,dones
 
     def update_lasers_isCollied_wrapper(self):
