@@ -381,3 +381,230 @@ def apf_evasive_gradient_3d(pos, hunter_positions, bound,
     gnorm = np.linalg.norm(grad)
     gradient_norm = (grad / gnorm) if gnorm > 1e-9 else np.zeros(3)
     return gradient_norm, U
+
+
+# =============================================================================
+# 3D Velocity Obstacle (VO) Cone Functions (方案三)
+# =============================================================================
+
+def vo_compute_cone_3d(p_self, p_other, r_self, r_other):
+    """
+    Compute a single 3D Velocity Obstacle cone for the collision pair
+    (self, other) with combined radius R = r_self + r_other.
+
+    VO cone definition (Fiorini & Shiller 1998):
+      VO_A,B(tau) = { v | exists t in [0, tau]: p_self + v*t in D(p_other + v_other*t, R) }
+    For pure geometry we use truncated cone with apex at p_other, axis = (p_self - p_other).
+    For the 3D cone:
+      - axis direction  d = normalize(p_self - p_other)
+      - half-angle     alpha = arcsin(R / ||p_self-p_other||),  clamped to [eps, pi/2-eps]
+      - distance       dist  = ||p_self - p_other||
+
+    Returns: dict{
+        'axis': unit vector d pointing from other -> self (cone symmetry axis),
+        'cos_half_angle': cos(alpha),   — the cone membership threshold for cosine of angle,
+        'sin_half_angle': sin(alpha),
+        'half_angle_rad': alpha,
+        'distance':       ||p_self - p_other||,
+        'R_combined':     r_self + r_other,
+        'valid':          True if the cone exists (dist > R_combined);
+                          False if already colliding/overlapping — caller should handle separately
+    }
+    """
+    p_self = np.array(p_self, dtype=float)
+    p_other = np.array(p_other, dtype=float)
+    R = float(r_self) + float(r_other)
+
+    diff = p_self - p_other
+    dist = np.linalg.norm(diff) + 1e-9
+    axis = diff / dist
+
+    # half-angle alpha = arcsin(R/dist). When dist <= R we are overlapping -> no cone geometry.
+    if dist <= R:
+        alpha = np.pi / 2.0 - 1e-3  # wide cone as fallback (everything is VO)
+        valid = False
+    else:
+        ratio = R / dist
+        ratio = np.clip(ratio, 0.0, 1.0 - 1e-6)
+        alpha = np.arcsin(ratio)
+        valid = True
+
+    return {
+        'axis': axis,
+        'cos_half_angle': float(np.cos(alpha)),
+        'sin_half_angle': float(np.sin(alpha)),
+        'half_angle_rad': float(alpha),
+        'distance': float(dist),
+        'R_combined': R,
+        'valid': valid,
+    }
+
+
+def vo_cone_contains(cone, v_rel):
+    """
+    Check whether relative velocity v_rel = v_self - v_other is strictly inside
+    the 3D VO cone (apex at origin, axis=cone.axis, half-angle = cone.half_angle_rad).
+
+    Membership test:
+      let u = normalize(v_rel)
+      if dot(u, cone.axis) > cos(alpha)  → v_rel is inside cone (collision velocity)
+    Returns: (inside_flag: bool, cos_angle: float)
+    """
+    v_rel = np.array(v_rel, dtype=float)
+    vnorm = np.linalg.norm(v_rel)
+    if vnorm < 1e-9:
+        # zero relative velocity → static: if overlapping we're colliding, but
+        # geometrically a 0 vector points nowhere; treat as inside for safety.
+        return (True if not cone['valid'] else False), 1.0
+    u = v_rel / vnorm
+    cos_angle = float(np.dot(u, cone['axis']))
+    return (cos_angle > cone['cos_half_angle']), cos_angle
+
+
+def vo_project_outside_cone(cone, v_rel):
+    """
+    Project a 3D relative velocity vector v_rel onto the closest point on the
+    VO cone BOUNDARY (outside of cone if it was inside). Returns new v_rel_proj.
+
+    Geometry:
+      - v_rel inside cone → rotate it to the cone boundary in the plane
+        spanned by (cone.axis, v_rel) such that angle(v_proj, axis) == alpha.
+      - v_rel already outside or on boundary → return unchanged.
+
+    Projection method (closed form, preserves ||v_rel|| when possible):
+      1. let e1 = cone.axis.
+      2. form e2 = normalize(v_rel - dot(v_rel,e1)*e1)  (perpendicular to axis,
+         aligned with v_rel component off-axis). If v_rel is parallel to axis,
+         pick any perpendicular (e.g. first nonzero of standard basis).
+      3. v_proj = |v_rel| * (cos(alpha) * e1 + sin(alpha) * e2)
+
+    The caller then computes v_self_proj = v_other + v_rel_proj.
+    """
+    v_rel = np.array(v_rel, dtype=float)
+    vnorm = np.linalg.norm(v_rel)
+    if vnorm < 1e-9:
+        # zero vel: rotate to just outside cone (use e2 direction with small step)
+        e1 = cone['axis']
+        e2 = _any_perp(e1)
+        alpha = cone['half_angle_rad']
+        # a tiny step along cone boundary:
+        return 1e-4 * (np.cos(alpha) * e1 + np.sin(alpha) * e2)
+
+    inside, _ = vo_cone_contains(cone, v_rel)
+    if not inside:
+        return v_rel.copy()
+
+    e1 = cone['axis']
+    e2_raw = v_rel - np.dot(v_rel, e1) * e1
+    e2norm = np.linalg.norm(e2_raw)
+    if e2norm < 1e-9:
+        # v_rel is exactly along cone axis (trivially inside since alpha>0).
+        # Use arbitrary perpendicular.
+        e2 = _any_perp(e1)
+    else:
+        e2 = e2_raw / e2norm
+
+    alpha = cone['half_angle_rad']
+    # Keep magnitude, angle = alpha from axis (on cone boundary = just outside membership
+    # condition if we use >= membership; we project to slightly > cos(alpha) boundary side)
+    v_proj = vnorm * (np.cos(alpha) * e1 + np.sin(alpha) * e2)
+    # Tiny epsilon safety offset to guarantee "outside" membership:
+    cos_angle_new = float(np.dot(v_proj / (np.linalg.norm(v_proj) + 1e-9), e1))
+    eps = 1e-6
+    if cos_angle_new >= cone['cos_half_angle']:
+        # push slightly more off-axis (by increasing sin component)
+        beta = alpha + eps
+        beta = min(beta, np.pi / 2.0 - 1e-6)
+        v_proj = vnorm * (np.cos(beta) * e1 + np.sin(beta) * e2)
+    return v_proj
+
+
+def _any_perp(v):
+    """Return a unit vector perpendicular to 3-vector v."""
+    v = np.asarray(v, dtype=float)
+    if abs(v[0]) < abs(v[1]) and abs(v[0]) < abs(v[2]):
+        tmp = np.array([0.0, -v[2], v[1]])
+    elif abs(v[1]) < abs(v[2]):
+        tmp = np.array([-v[2], 0.0, v[0]])
+    else:
+        tmp = np.array([-v[1], v[0], 0.0])
+    n = np.linalg.norm(tmp)
+    if n < 1e-9:
+        return np.array([1.0, 0.0, 0.0])
+    return tmp / n
+
+
+def vo_aggregate_obstacles(pos_self, vel_self, obstacles, other_agents,
+                           r_self, r_other_dynamic, r_obstacle_static):
+    """
+    Aggregate all velocity obstacles (dynamic + static) for one agent and
+    apply projection to get a safe action velocity.
+
+    For static obstacles (zero velocity) we still use VO with v_other = 0.
+    For walls we use per-face plane projection (not cone) as additional safety.
+
+    Args:
+      pos_self, vel_self: current 3D position / velocity of self (pre-action input).
+      obstacles: list of {'position':[x,y,z], 'radius':r} static spheres.
+      other_agents: list of (pos_other, vel_other, r_override_or_None) for dynamic agents.
+      r_self: self radius
+      r_other_dynamic: default dynamic-agent radius
+      r_obstacle_static: default static-obstacle radius override (or use per obstacle dict)
+
+    Returns: (vel_safe_projected, cone_observations_list)
+      vel_safe_projected: velocity after one-pass VO+wall projection
+      cone_observations_list: list of 6-d observation tuples per top-k cone
+                              (axis_x, axis_y, axis_z, cos_half_angle, dist_norm, in_vo_flag)
+    """
+    pos_self = np.array(pos_self, dtype=float)
+    vel_self = np.array(vel_self, dtype=float)
+    cones_meta = []  # (cone, v_other, priority_key)
+    R_bdy = 1.0  # cube bound side assumed external; will be handled separately
+
+    # (1) dynamic agents: high priority
+    for item in other_agents:
+        if len(item) == 3:
+            po, vo, rr = item
+        else:
+            po, vo = item
+            rr = r_other_dynamic
+        cone = vo_compute_cone_3d(pos_self, po, r_self, rr)
+        # priority = inverse distance (closer = more important) + dynamic bump
+        priority = 1.0 / (cone['distance'] + 1e-6) + 2.0
+        cones_meta.append((cone, np.array(vo, dtype=float), priority, 'dynamic'))
+
+    # (2) static obstacles
+    for obs in obstacles:
+        po = np.array(obs['position'], dtype=float)
+        rr = float(obs.get('radius', r_obstacle_static))
+        cone = vo_compute_cone_3d(pos_self, po, r_self, rr)
+        priority = 1.0 / (cone['distance'] + 1e-6)
+        cones_meta.append((cone, np.zeros(3), priority, 'static'))
+
+    # Sort by priority (descending) — apply closest/dynamic first
+    cones_meta.sort(key=lambda x: -x[2])
+
+    # (3) Apply projection sequentially (one-pass). Re-check membership after each step
+    v_cur = vel_self.copy()
+    top_k_for_obs = []  # save first k cones for agent observation
+    K_OBS = 3
+    for cone, v_other, prio, tag in cones_meta:
+        v_rel = v_cur - v_other
+        inside, cos_a = vo_cone_contains(cone, v_rel)
+        in_flag = 1.0 if inside else 0.0
+        if len(top_k_for_obs) < K_OBS:
+            dist_norm = float(np.clip(cone['distance'] / 3.0, 0.0, 1.0))  # / L ~= sqrt(3)*1 ~= 3 for norm
+            top_k_for_obs.append((cone, dist_norm, in_flag))
+        if inside:
+            v_rel_proj = vo_project_outside_cone(cone, v_rel)
+            v_cur = v_other + v_rel_proj
+
+    # (4) Observations: top-K cones flattened
+    obs_vec = []
+    for cone, d_norm, in_flag in top_k_for_obs:
+        obs_vec.extend([float(cone['axis'][0]), float(cone['axis'][1]), float(cone['axis'][2]),
+                        float(cone['cos_half_angle']), d_norm, in_flag])
+    # pad if less than K_OBS cones
+    while len(obs_vec) < K_OBS * 6:
+        obs_vec.extend([0.0, 0.0, 0.0, 1.0, 1.0, 0.0])
+    return v_cur, np.array(obs_vec, dtype=float)
