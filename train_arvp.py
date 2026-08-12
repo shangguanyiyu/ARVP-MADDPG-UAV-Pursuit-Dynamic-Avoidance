@@ -100,9 +100,9 @@ if __name__ == '__main__':
     memory = PERMultiAgentReplayBuffer(1000000, critic_dims, actor_dims,
                         n_actions, n_agents, batch_size=256)
 
-    BATCH_SIZE = 10  # 每个 batch 包含的回合数 (暂时 10 验证)
-    N_GAMES = 10
-    MAX_STEPS = 20
+    BATCH_SIZE = 100  # 每个 batch 包含的回合数
+    N_GAMES = 5000
+    MAX_STEPS = 110
     total_steps = 0
     score_history = []
     target_score_history = []
@@ -256,21 +256,15 @@ if __name__ == '__main__':
 
             # 如果 avg_score 比 best_score 大，更新 best_score
             if avg_score > best_score:
-                
+
                 tqdm.write(f'New best avg score {avg_score:.2f} > previous best score {best_score:.2f}.')
                 maddpg_agents.save_checkpoint()
                 best_score = avg_score
-                process = subprocess.Popen(['python', 'evaluate_arvp.py'])
-
-                # 模拟主程序运行
-                time.sleep(10)  # 假设主程序运行 10 秒
-
-                # 终止子进程
-                process.terminate()  # 发送 SIGTERM 信号
-                # process.kill()  # 如果需要强制终止，可以使用 SIGKILL
-
-                # 等待子进程结束
-                process.wait()
+                # 注释掉 evaluate_arvp.py 子进程调用，避免训练中频繁启动浪费时间
+                # process = subprocess.Popen(['python', 'evaluate_arvp.py'])
+                # time.sleep(10)
+                # process.terminate()
+                # process.wait()
 
     # 计算滑动均值
     if len(score_history) >= window_size:
