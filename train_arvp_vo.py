@@ -97,7 +97,7 @@ if __name__ == '__main__':
     #
     # memory = MultiAgentReplayBuffer(1000000, critic_dims, actor_dims,
     #                     n_actions, n_agents, batch_size=256)
-    memory = PERMultiAgentReplayBuffer(1000000, critic_dims, actor_dims,
+    memory = PERMultiAgentReplayBuffer(200000, critic_dims, actor_dims,
                         n_actions, n_agents, batch_size=256)
 
     BATCH_SIZE = 100  # 每个 batch 包含的回合数
@@ -244,6 +244,8 @@ if __name__ == '__main__':
                     pd.DataFrame(csv_rows[-BATCH_SIZE:])[csv_header].to_csv(
                         f_csv, header=False, index=False)
                 tqdm.write(f'CSV training log flushed to {csv_train_file} (total rows so far: {len(csv_rows)})')
+                # 清空已写入的行，释放内存
+                csv_rows = csv_rows[-BATCH_SIZE:]  # keep only last batch for avg ref
 
             # 打印当前批次的进度和平均奖励
             pbar.close()  # 关闭当前进度条
@@ -286,7 +288,7 @@ if __name__ == '__main__':
 
     # 保存图像
     plt.tight_layout()
-    plt.savefig('arvpApf&actionReward_stage1_reward.png')
+    plt.savefig('arvpVo_stage1_reward.png')
     # =========================================================================
     # APF 方案一：同时保存一份奖励曲线图到 CSV 日志目录确保可提交
     # =========================================================================
