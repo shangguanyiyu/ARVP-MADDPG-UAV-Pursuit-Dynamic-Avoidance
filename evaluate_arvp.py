@@ -1,16 +1,95 @@
+"""
+evaluate_arvp.py
+================
+评估脚本。
+
+路径中心化说明：
+  本脚本不再硬编码任何模型目录，所有路径/维度参数都从 train_arvp2D.py 写出的
+  _last_arvp2D_run.json 读取（通过 --from-config），或通过命令行参数显式传入。
+  这样 train_arvp2D.py 子进程调用本脚本时，可以加载到正确的模型检查点路径。
+
+用法：
+  # 训练时由 train_arvp2D.py 自动调用（无 GUI，跑完即退出）：
+  python evaluate_arvp.py --headless --from-config --max-frames 50
+
+  # 也可以手动指定路径（覆盖配置文件）：
+  python evaluate_arvp.py --headless \
+      --chkpt-dir tmp_avoid_dynamic/maddpgwithatt_2D/ \
+      --scenario 0815_103020_stage1_UAV_Round_up \
+      --obs-agt 26 --obs-tar 23 --max-frames 100
+
+  # 带动画的可视化评估（需要图形环境）：
+  python evaluate_arvp.py --from-config
+"""
 from model.maddpg_att import MADDPGWithAttention
-from model.maddpg import MADDPG
 from env.sim_env_rvo import UAVEnv
 import numpy as np
 import sys
+import matplotlib
+matplotlib.use('Agg')  # 无显示环境也能 import / 保存图
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import warnings
 import os
 import time
+import argparse
+import json
 from UAVTask import UAVTaskEvaluator
 
 warnings.filterwarnings('ignore')
+
+# 默认配置文件名（与 train_arvp2D.py 保持一致），位于本脚本同目录
+DEFAULT_CONFIG_FILENAME = "_last_arvp2D_run.json"
+
+
+def load_run_config(config_path: str) -> dict:
+    """读取 train_arvp2D.py 写出的运行配置 JSON"""
+    with open(config_path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def resolve_config_path(args) -> str:
+    """定位配置 JSON 文件路径"""
+    if args.config and os.path.isfile(args.config):
+        return args.config
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidate = os.path.join(here, DEFAULT_CONFIG_FILENAME)
+    if os.path.isfile(candidate):
+        return candidate
+    raise FileNotFoundError(
+        f"未找到配置文件 {DEFAULT_CONFIG_FILENAME}（位于 {here}）。"
+        f"请先运行 train_arvp2D.py，或通过 --config / --chkpt-dir 显式指定路径。")
+
+
+def build_eval_params(args):
+    """合并配置文件与命令行参数，命令行参数优先级更高。返回评估所需路径/维度字典。"""
+    cfg = {}
+    if args.from_config or (not args.chkpt_dir and not args.scenario):
+        cfg_path = resolve_config_path(args)
+        cfg = load_run_config(cfg_path)
+        print(f"[evaluate] 读取配置: {cfg_path}")
+
+    chkpt_dir = args.chkpt_dir or cfg.get("chkpt_dir_with_sep", "tmp_avoid_dynamic/maddpgwithatt_2D/")
+    scenario = args.scenario or cfg.get("scenario_name", "UAV_Round_up")
+    obs_agt = args.obs_agt if args.obs_agt is not None else cfg.get("obs_agt_dim", 26)
+    obs_tar = args.obs_tar if args.obs_tar is not None else cfg.get("obs_tar_dim", 23)
+
+    model_save_dir = os.path.join(chkpt_dir.rstrip(os.sep), scenario)
+    print(f"[evaluate] chkpt_dir = {chkpt_dir}")
+    print(f"[evaluate] scenario  = {scenario}")
+    print(f"[evaluate] 模型目录  = {model_save_dir}")
+    print(f"[evaluate] obs_agt={obs_agt}, obs_tar={obs_tar}")
+
+    if not os.path.isdir(model_save_dir):
+        print(f"[evaluate][警告] 模型目录不存在: {model_save_dir}")
+
+    return {
+        "chkpt_dir": chkpt_dir,
+        "scenario": scenario,
+        "obs_agt": obs_agt,
+        "obs_tar": obs_tar,
+        "model_save_dir": model_save_dir,
+    }
 
 
 def moving_average(data, window_size=5):
@@ -95,27 +174,123 @@ def plot_velocities(velocities_magnitude, velocities_x, velocities_y):
     plt.tight_layout()
     plt.show()
 
+
+def run_headless(env, maddpg_agents, max_frames=50):
+    """无 GUI 的快速评估：最多跑 max_frames 步，结束后打印每个 UAV 的评测结果。"""
+    n_agents = env.num_agents
+    velocities_magnitude = [[] for _ in range(n_agents)]
+    velocities_x = [[] for _ in range(n_agents)]
+    velocities_y = [[] for _ in range(n_agents)]
+    trajectories = [[] for _ in range(n_agents)]
+    collisions_record = [[] for _ in range(n_agents)]
+
+    obs = env.reset()
+    total_steps = 0
+    mul_pos = None
+    dones = [False] * n_agents
+
+    print(f"[evaluate][headless] 开始评估，最多 {max_frames} 步...")
+    while total_steps < max_frames:
+        actions = maddpg_agents.choose_action(obs, total_steps, evaluate=True)
+        obs_, rewards, dones, collision_info, mul_pos = env.step(actions)
+
+        for i in range(n_agents):
+            trajectories[i].append(env.multi_current_pos[i])
+            collisions_record[i].append(collision_info)
+            vel = env.multi_current_vel[i]
+            v_x, v_y = vel
+            speed = np.linalg.norm(vel)
+            velocities_magnitude[i].append(speed)
+            velocities_x[i].append(v_x)
+            velocities_y[i].append(v_y)
+
+        obs = obs_
+        total_steps += 1
+
+        if any(dones):
+            print(f"[evaluate][headless] Round-up finished in {total_steps} steps.")
+            break
+
+    if total_steps >= max_frames and not any(dones):
+        print(f"[evaluate][headless] 达到最大步数 {max_frames}，未捕获到 done。")
+
+    # 进行评测
+    evaluator = UAVTaskEvaluator([0, 0, 0], max_time_steps=max(max_frames, 1), dones=dones)
+
+    print("========== 评测结果 ==========")
+    any_result = False
+    for i in range(n_agents):
+        try:
+            result = evaluator.evaluate(trajectories[i], collisions_record[i], mul_pos)
+            any_result = True
+            print(f"评测结果 (UAV {i}):")
+            for key, value in result.items():
+                if isinstance(value, (int, float, np.floating)):
+                    print(f"  {key}: {float(value):.2f}")
+                else:
+                    print(f"  {key}: {value}")
+        except Exception as e:
+            print(f"[evaluate][headless] UAV {i} 评测失败: {type(e).__name__}: {e}")
+
+    if not any_result:
+        print("[evaluate][headless] 无可用评测结果。")
+
+    print(f"[evaluate][headless] 评估结束，共 {total_steps} 步。")
+    return total_steps
+
+
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="ARVP 评估脚本（路径参数化）")
+    parser.add_argument('--from-config', action='store_true',
+                        help='优先从 _last_arvp2D_run.json 读取路径/维度参数')
+    parser.add_argument('--config', type=str, default=None,
+                        help='指定配置 JSON 文件路径（默认使用脚本同目录的 _last_arvp2D_run.json）')
+    parser.add_argument('--chkpt-dir', type=str, default=None,
+                        help='模型检查点根目录（末尾带分隔符），覆盖配置文件')
+    parser.add_argument('--scenario', type=str, default=None,
+                        help='场景名（会拼接到 chkpt-dir 后），覆盖配置文件')
+    parser.add_argument('--obs-agt', type=int, default=None,
+                        help='agent 观测维度，覆盖配置文件')
+    parser.add_argument('--obs-tar', type=int, default=None,
+                        help='target 观测维度，覆盖配置文件')
+    parser.add_argument('--headless', action='store_true',
+                        help='无 GUI 模式：跑 --max-frames 步后自动退出')
+    parser.add_argument('--max-frames', type=int, default=1000,
+                        help='headless 模式下的最大步数（默认 1000）')
+    args = parser.parse_args()
+
+    params = build_eval_params(args)
+
     env = UAVEnv()
     n_agents = env.num_agents
     n_actions = 2
     actor_dims = []
-    velocities_magnitude = [[] for _ in range(env.num_agents)]  # record magnitude of vel
-    velocities_x = [[] for _ in range(env.num_agents)]  # record vel_x
-    velocities_y = [[] for _ in range(env.num_agents)]  # record vel_y
-    trajectories = [[] for _ in range(env.num_agents)]  # 每个无人机的轨迹
-    collisions_record = [[] for _ in range(env.num_agents)]  # 每个无人机的碰撞记录
-    energy_consumption = [0 for _ in range(env.num_agents)]  # 每个无人机的能量消耗
-
     for agent_id in env.observation_space.keys():
         actor_dims.append(env.observation_space[agent_id].shape[0])
     critic_dims = sum(actor_dims)
+
     maddpg_agents = MADDPGWithAttention(actor_dims, critic_dims, n_agents, n_actions,
-                           alpha=0.00001, beta=0.00001, scenario='UAV_Round_up',
-                           chkpt_dir='tmp_avoid_dynamic/maddpgwithatt/')
+                                        alpha=0.00001, beta=0.00001,
+                                        scenario=params["scenario"],
+                                        chkpt_dir=params["chkpt_dir"],
+                                        obs_agt=params["obs_agt"],
+                                        obs_tar=params["obs_tar"])
 
     maddpg_agents.load_checkpoint()
     print('---- Evaluating ----')
+
+    # ===================== headless 模式：跑完即退出 =====================
+    if args.headless:
+        run_headless(env, maddpg_agents, max_frames=args.max_frames)
+        sys.exit(0)
+
+    # ===================== 可视化动画模式（需要图形环境） =====================
+    velocities_magnitude = [[] for _ in range(env.num_agents)]
+    velocities_x = [[] for _ in range(env.num_agents)]
+    velocities_y = [[] for _ in range(env.num_agents)]
+    trajectories = [[] for _ in range(env.num_agents)]
+    collisions_record = [[] for _ in range(env.num_agents)]
+    energy_consumption = [0 for _ in range(env.num_agents)]
 
     obs = env.reset()
 
@@ -174,88 +349,9 @@ if __name__ == '__main__':
         total_steps += 1
         return []
 
-    # def update(frame):
-    #     global obs, velocities_magnitude, velocities_x, velocities_y
-    #     global trajectories, collisions_record, energy_consumption, total_steps
-    #
-    #     actions = maddpg_agents.choose_action(obs, total_steps, evaluate=True)
-    #     obs_, rewards, dones, collision_info = env.step(actions)
-    #
-    #     for i in range(env.num_agents):
-    #         # 记录轨迹
-    #         trajectories[i].append(env.multi_current_pos[i])
-    #
-    #         # 记录碰撞信息
-    #         collisions_record[i].append(collision_info)
-    #
-    #         # 记录速度信息
-    #         vel = env.multi_current_vel[i]
-    #         v_x, v_y = vel
-    #         speed = np.linalg.norm(vel)
-    #         velocities_magnitude[i].append(speed)
-    #         velocities_x[i].append(v_x)
-    #         velocities_y[i].append(v_y)
-    #
-    #     # 清空当前图像
-    #     ax.cla()
-    #
-    #     # 绘制 UAV 的轨迹
-    #     for i in range(env.num_agents):
-    #         trajectory = np.array(trajectories[i])
-    #         if len(trajectory) > 1:
-    #             ax.plot(trajectory[:, 0], trajectory[:, 1], label=f'UAV {i}')
-    #
-    #     # 绘制 VO 区域
-    #     ws_model = env.get_ws_model()
-    #     env.VO_Plot(env.multi_current_pos, env.multi_current_vel, ws_model, FLAG=True, ax=ax)
-    #
-    #     # 绘制 UAV 的当前位置
-    #     for i, pos in enumerate(env.multi_current_pos):
-    #         ax.scatter(pos[0], pos[1], label=f'UAV {i}', color='blue')
-    #
-    #     # 绘制障碍物
-    #     for obstacle in ws_model['circular_obstacles']:
-    #         pos = obstacle['position']
-    #         radius = obstacle['radius']
-    #         circle = plt.Circle(pos, radius, color='gray', alpha=0.5)
-    #         ax.add_patch(circle)
-    #
-    #     # 设置图像范围和标题
-    #     ax.set_xlim(-0.1, env.length + 0.1)
-    #     ax.set_ylim(-0.1, env.length + 0.1)
-    #     ax.set_title("UAV Simulation with VO Regions")
-    #     ax.legend()
-    #
-    #     # 渲染动画帧
-    #     obs = obs_
-    #
-    #     if any(dones) or frame > 1000:
-    #         ani.event_source.stop()
-    #         print("Round-up finished in", frame, "steps.")
-    #
-    #         # 进行评测
-    #         evaluator = UAVTaskEvaluator(target_position=[0, 0], max_time_steps=1000, dones=dones)
-    #
-    #         for i in range(env.num_agents):
-    #             result = evaluator.evaluate(trajectories[i], collisions_record[i])
-    #             print(f"评测结果 (UAV {i}):")
-    #             for key, value in result.items():
-    #                 print(f"  {key}: {value:.2f}")
-    #
-    #         # 平滑数据绘图
-    #         smoothed_velocities_magnitude = [moving_average(v, window_size=5) for v in velocities_magnitude]
-    #         smoothed_velocities_x = [moving_average(v, window_size=5) for v in velocities_x]
-    #         smoothed_velocities_y = [moving_average(v, window_size=5) for v in velocities_y]
-    #         time_steps = range(len(smoothed_velocities_magnitude[0]))
-    #         plot_velocities(smoothed_velocities_magnitude, smoothed_velocities_x, smoothed_velocities_y)
-    #
-    #     total_steps += 1
-    #     return []
-
 
     total_steps = 0
 
     fig = plt.figure()
-    # fig, ax = plt.subplots(figsize=(6, 6))
     ani = animation.FuncAnimation(fig, update, frames=10000, interval=20)
     plt.show()

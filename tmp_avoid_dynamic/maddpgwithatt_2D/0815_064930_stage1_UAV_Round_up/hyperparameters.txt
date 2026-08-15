@@ -1,0 +1,6 @@
+run_prefix: 0815_064930_stage1
+stage: stage1
+alpha: 1e-05
+beta: 0.001
+Obs dim agent: 26, target: 23
+method: train_arvp2D: 基于 train_arvp.py 的 MADDPG+Attention 基线训练 (2D)
