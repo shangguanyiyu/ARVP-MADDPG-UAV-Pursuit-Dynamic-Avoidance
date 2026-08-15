@@ -171,7 +171,8 @@ if __name__ == '__main__':
         f.write(f'reward components: mu1=0.9, mu2=0.2, mu3=0.0(stage1), mu4=10, mu5=0.1, mu6=0.5, mu7=0.1\n')
     print(f"[origin3D-基线] 超参数文本保存到: {hyperparams_txt_path}")
 
-    memory = PERMultiAgentReplayBuffer(1000000, critic_dims, actor_dims,
+    # 内存优化：限制 replay buffer 大小，避免长训练 OOM (原 1000000 → 200000)
+    memory = PERMultiAgentReplayBuffer(200000, critic_dims, actor_dims,
                                        n_actions, n_agents, batch_size=256)
 
     BATCH_SIZE = 100
@@ -303,7 +304,7 @@ if __name__ == '__main__':
         ('alpha', alpha),
         ('beta', beta),
         ('replay_buffer', 'PERMultiAgentReplayBuffer'),
-        ('buffer_size', 1000000),
+        ('buffer_size', 200000),
         ('obs_agt_dim', obs_agt),
         ('obs_tar_dim', obs_tar),
         ('n_actions', n_actions),

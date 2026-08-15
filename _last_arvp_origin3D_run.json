@@ -1,17 +1,17 @@
 {
   "stage": "stage1",
-  "run_prefix": "0815_041842_stage1",
-  "scenario_name": "0815_041842_stage1_UAV_Round_up",
+  "run_prefix": "0815_120320_stage1",
+  "scenario_name": "0815_120320_stage1_UAV_Round_up",
   "base_chkpt_parent": "tmp_avoid_dynamic/maddpgwithatt_origin3D",
   "chkpt_dir_with_sep": "tmp_avoid_dynamic/maddpgwithatt_origin3D/",
-  "model_save_dir": "tmp_avoid_dynamic/maddpgwithatt_origin3D/0815_041842_stage1_UAV_Round_up",
-  "log_dir": "log_arvp_origin3D/0815_041842_stage1_arvp_origin3D",
-  "runs_parent_dir": "runs/0815_041842_stage1_arvp_origin3D",
-  "reward_png_name": "0815_041842_stage1_stage1_arvp_origin3D_reward.png",
+  "model_save_dir": "tmp_avoid_dynamic/maddpgwithatt_origin3D/0815_120320_stage1_UAV_Round_up",
+  "log_dir": "log_arvp_origin3D/0815_120320_stage1_arvp_origin3D",
+  "runs_parent_dir": "runs/0815_120320_stage1_arvp_origin3D",
+  "reward_png_name": "0815_120320_stage1_stage1_arvp_origin3D_reward.png",
   "obs_agt_dim": 56,
   "obs_tar_dim": 50,
   "n_agents": 4,
   "n_actions": 3,
   "method": "origin3D: 原生 3D MADDPG-LSTM-Att-PER 基线",
-  "created_at": "2026-08-15T04:18:42"
+  "created_at": "2026-08-15T12:03:20"
 }
