@@ -1,0 +1,14 @@
+run_prefix: 0815_172129_stage1
+stage: stage1
+alpha: 1e-05
+beta: 0.001
+VO mu8 (修正惩罚系数): -0.2
+VO mu9 (预测避碰加分系数): 0.05
+VO TTC_threshold (s): 1.0
+VO prox_threshold (距离阈值): 0.8
+Obs dim agent: 32, target: 29
+Obs VO2D features per agent: 6 (invasion_score, min_ttc_norm, active_count, escape_x, escape_y, total_occ_angle)
+reward components: mu1=0.9, mu2=0.2, mu3=0.0(stage1), mu4=10, mu5=0.1, mu8=-0.2, mu9=0.05
+创新点1: 2D VO 立体锥观测编码 (6-dim compact features)
+创新点2: Post-Action VO Projection 层 (动作执行前投影到VO可行域)
+创新点3: mu8修正惩罚 + mu9预测性避碰加分

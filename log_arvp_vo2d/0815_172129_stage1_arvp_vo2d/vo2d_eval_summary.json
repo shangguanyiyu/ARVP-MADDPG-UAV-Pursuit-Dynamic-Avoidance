@@ -1,0 +1,39 @@
+{
+  "finished_frame": 49,
+  "evaluator_results": {
+    "0": {
+      "completion_score": 0.0,
+      "path_efficiency": 3.3503026327621486,
+      "collision_count": 0.0,
+      "safety_score": 0.0,
+      "time_efficiency": 0.0,
+      "total_score": 167.51513163810742
+    },
+    "1": {
+      "completion_score": 0.0,
+      "path_efficiency": 1.6072333458126746,
+      "collision_count": 0.0,
+      "safety_score": 0.0,
+      "time_efficiency": 0.0,
+      "total_score": 80.36166729063373
+    },
+    "2": {
+      "completion_score": 0.0,
+      "path_efficiency": 1.9682727042213883,
+      "collision_count": 0.0,
+      "safety_score": 0.0,
+      "time_efficiency": 0.0,
+      "total_score": 98.41363521106942
+    },
+    "3": {
+      "completion_score": 0.0,
+      "path_efficiency": 2.368017252821466,
+      "collision_count": 0.0,
+      "safety_score": 0.0,
+      "time_efficiency": 0.0,
+      "total_score": 118.4008626410733
+    }
+  },
+  "method": "方案三: VO速度锥约束的动作空间投影 + 2D立体锥观测 (VO2D)",
+  "run_prefix": "0815_172129_stage1"
+}
