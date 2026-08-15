@@ -1,0 +1,24 @@
+parameter,value
+N_GAMES,5000
+MAX_STEPS,110
+BATCH_SIZE_memory,256
+BATCH_SIZE_print,100
+alpha,1e-05
+beta,0.001
+replay_buffer,PERMultiAgentReplayBuffer
+buffer_size,1000000
+obs_agt_dim,32
+obs_tar_dim,29
+mu1_r_near,0.9
+mu2_r_safe,0.2
+mu3_r_stage,0.0
+mu4_r_finish,10
+mu5_vo,0.1
+mu8_vo_correction_penalty,-0.2
+mu9_vo_predictive_avoid_bonus,0.05
+vo_TTC_threshold_sec,1.0
+vo_prox_threshold,0.8
+method,方案三: VO速度锥约束的动作空间投影 + 2D立体锥观测 (VO2D)
+stage,stage1
+run_prefix,0815_172129_stage1
+total_trained_episodes,5000
