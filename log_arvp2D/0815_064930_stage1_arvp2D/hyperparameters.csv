@@ -1,0 +1,15 @@
+parameter,value
+N_GAMES,5000
+MAX_STEPS,110
+BATCH_SIZE_memory,256
+BATCH_SIZE_print,100
+alpha,1e-05
+beta,0.001
+replay_buffer,PERMultiAgentReplayBuffer
+buffer_size,1000000
+obs_agt_dim,26
+obs_tar_dim,23
+method,train_arvp2D: 基于 train_arvp.py 的 MADDPG+Attention 基线训练 (2D)
+stage,stage1
+run_prefix,0815_064930_stage1
+total_trained_episodes,5000
