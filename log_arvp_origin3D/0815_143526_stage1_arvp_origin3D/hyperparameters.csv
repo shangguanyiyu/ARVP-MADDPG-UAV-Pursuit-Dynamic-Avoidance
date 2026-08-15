@@ -1,0 +1,23 @@
+parameter,value
+N_GAMES,5000
+MAX_STEPS,110
+BATCH_SIZE_memory,256
+BATCH_SIZE_print,100
+alpha,1e-05
+beta,0.001
+replay_buffer,PERMultiAgentReplayBuffer
+buffer_size,200000
+obs_agt_dim,56
+obs_tar_dim,50
+n_actions,3
+mu1_r_near,0.9
+mu2_r_safe,0.2
+mu3_r_stage,0.0
+mu4_r_finish,10
+mu5_vo,0.1
+mu6_shaping,0.5
+mu7_align,0.1
+method,origin3D: 原生 3D MADDPG-LSTM-Att-PER 基线
+stage,stage1
+run_prefix,0815_143526_stage1
+total_trained_episodes,5000
