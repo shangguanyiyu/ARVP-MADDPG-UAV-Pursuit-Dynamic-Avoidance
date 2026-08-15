@@ -19,6 +19,9 @@ from math import cos, sin, tan, atan2, asin
 import time
 
 from math import pi as PI
+from rrt_star_2d import (RRTStar2D, sample_waypoints_along_path,
+                         compute_encircle_positions, encode_waypoints_for_obs,
+                         encode_hunter_threat_for_target)
 
 class UAVEnv:
     def __init__(self,length=2,num_obstacle=4,num_agents=4):
@@ -35,14 +38,37 @@ class UAVEnv:
         self.multi_current_lasers = [[self.L_sensor for _ in range(self.num_lasers)] for _ in range(self.num_agents)]
         self.agents = ['agent_0','agent_1','agent_2','target']
         self.info = np.random.get_state() # get seed
-        # self.obstacles = [obstacle() for _ in range(self.num_obstacle)]
         self.obstacles = [
             obstacle(mode='random', index=i, total_obstacles=self.num_obstacle)
             for i in range(self.num_obstacle)
         ]
         self.history_positions = [[] for _ in range(num_agents)]
-        self.obs_vel = [obs.velocity for obs in self.obstacles]  # 初始化障碍物速度
-        self.last_pos = [np.zeros(2) for _ in range(num_agents)]  # 初始化为零向量
+        self.obs_vel = [obs.velocity for obs in self.obstacles]
+        self.last_pos = [np.zeros(2) for _ in range(num_agents)]
+
+        # ===== RRT* 2D 参数 =====
+        self.rrt_robot_radius = 0.06
+        self.rrt_max_iter = 300
+        self.rrt_step_size = 0.12
+        self.rrt_goal_radius = 0.15
+        self.rrt_neighbor_radius = 0.25
+        self.rrt_encircle_radius = 0.25
+        self.rrt_num_waypoints = 4
+        # RRT* 状态缓存（reset 时生成，每回合只用一次）
+        self.rrt_paths = []
+        self.rrt_waypoints = []
+        self.rrt_encircle_goals = []
+        self.rrt_last_progress = [0.0, 0.0, 0.0]
+        self.rrt_total_path_len = [0.0, 0.0, 0.0]
+        # RRT* 奖励权重
+        self.mu_rrt = 0.5        # 路径跟随奖励总权重
+        self.mu_rrt_track = 0.4  # 路径方向对齐奖励系数
+        self.mu_rrt_progress = 0.6  # 沿路径推进奖励系数
+        # 捕获率里程碑（奖励）
+        self.capture_milestone_reward = 2.0
+        self.capture_d_milestone_1 = 0.5
+        self.capture_d_milestone_2 = 0.35
+        self.capture_milestone_achieved = [False, False]
 
 
         self.action_space = {
@@ -51,11 +77,14 @@ class UAVEnv:
             'agent_2': spaces.Box(low=-np.inf, high=np.inf, shape=(2,)),
             'target': spaces.Box(low=-np.inf, high=np.inf, shape=(2,))
             } # action represents [a_x,a_y]
+        # Observation 增强后维度：
+        # hunter: 26 + 12 (RRT 4 waypoints × 3) = 38
+        # target: 23 + 9  (3 hunters × 3 threat)  = 32
         self.observation_space = {
-            'agent_0': spaces.Box(low=-np.inf, high=np.inf, shape=(26,)),
-            'agent_1': spaces.Box(low=-np.inf, high=np.inf, shape=(26,)),
-            'agent_2': spaces.Box(low=-np.inf, high=np.inf, shape=(26,)),
-            'target': spaces.Box(low=-np.inf, high=np.inf, shape=(23,))
+            'agent_0': spaces.Box(low=-np.inf, high=np.inf, shape=(38,)),
+            'agent_1': spaces.Box(low=-np.inf, high=np.inf, shape=(38,)),
+            'agent_2': spaces.Box(low=-np.inf, high=np.inf, shape=(38,)),
+            'target': spaces.Box(low=-np.inf, high=np.inf, shape=(32,))
         }
 
     def get_ws_model(self):
@@ -70,7 +99,6 @@ class UAVEnv:
         }
         return ws_model
     def reset(self):
-        # SEED = random.randint(1,1000)
         SEED = int(time.time() * 1000) % 1000
         random.seed(SEED)
         np.random.seed(SEED)
@@ -78,21 +106,70 @@ class UAVEnv:
         self.multi_current_vel = []
         self.history_positions = [[] for _ in range(self.num_agents)]
         for i in range(self.num_agents):
-            if i != self.num_agents - 1: # if not target
+            if i != self.num_agents - 1:
                 self.multi_current_pos.append(np.random.uniform(low=0.1,high=0.4,size=(2,)))
-            else: # for target
-                # self.multi_current_pos.append(np.array([1.5,1.5]))
-                # self.multi_current_pos.append(np.array([0.5,1.75]))
+            else:
                 self.multi_current_pos.append(np.random.uniform(low=1.3, high=1.8, size=(2,)))
-            self.multi_current_vel.append(np.zeros(2)) # initial velocity = [0,0]
-            # print(self.multi_current_pos[i])
+            self.multi_current_vel.append(np.zeros(2))
 
-        # update lasers
+        # ===== RRT* 2D: 每回合 reset 时规划一次 =====
+        self._plan_rrt_paths_all_hunters()
+        self.capture_milestone_achieved = [False, False]
+
         self.update_lasers_isCollied_wrapper()
-        ## multi_obs is list of agent_obs, state is multi_obs after flattenned
         multi_obs = self.get_multi_obs()
 
         return multi_obs
+
+    def _plan_rrt_paths_all_hunters(self):
+        target_pos = np.array(self.multi_current_pos[-1], dtype=float)
+        n_hunters = self.num_agents - 1
+
+        encircle_pts = compute_encircle_positions(
+            target_pos, num_points=n_hunters,
+            encircle_radius=self.rrt_encircle_radius
+        )
+
+        circular_obstacles = [
+            {'position': np.array(obs.position, dtype=float),
+             'radius': float(obs.radius)}
+            for obs in self.obstacles
+        ]
+
+        self.rrt_paths = []
+        self.rrt_waypoints = []
+        self.rrt_encircle_goals = []
+        self.rrt_last_progress = [0.0] * n_hunters
+        self.rrt_total_path_len = [0.0] * n_hunters
+
+        for hi in range(n_hunters):
+            planner = RRTStar2D(
+                bounds=(self.length, self.length),
+                circular_obstacles=circular_obstacles,
+                robot_radius=self.rrt_robot_radius,
+                max_iter=self.rrt_max_iter,
+                step_size=self.rrt_step_size,
+                goal_radius=self.rrt_goal_radius,
+                neighbor_radius=self.rrt_neighbor_radius,
+            )
+            start = np.array(self.multi_current_pos[hi], dtype=float)
+            goal = encircle_pts[hi]
+            path = planner.plan(start, goal)
+            self.rrt_paths.append(path)
+            self.rrt_encircle_goals.append(goal)
+
+            waypoints = sample_waypoints_along_path(
+                path, start,
+                num_waypoints=self.rrt_num_waypoints,
+            )
+            self.rrt_waypoints.append(waypoints)
+
+            if len(path) >= 2:
+                path_arr = np.array(path)
+                seg_lens = np.linalg.norm(np.diff(path_arr, axis=0), axis=1)
+                self.rrt_total_path_len[hi] = float(np.sum(seg_lens))
+            else:
+                self.rrt_total_path_len[hi] = float(np.linalg.norm(goal - start))
 
     def compute_acceleration(self, actions):
         """
@@ -255,6 +332,22 @@ class UAVEnv:
         total_obs = []
         single_obs = []
         S_evade_d = [] # dim 3 only for target
+        # 预计算当前步的 RRT 路标点（沿路径推进）
+        n_hunters = self.num_agents - 1
+        current_rrt_waypoints = []
+        for hi in range(n_hunters):
+            if hi < len(self.rrt_paths) and self.rrt_paths[hi]:
+                wps = sample_waypoints_along_path(
+                    self.rrt_paths[hi],
+                    np.array(self.multi_current_pos[hi], dtype=float),
+                    num_waypoints=self.rrt_num_waypoints,
+                )
+            else:
+                wps = [np.array(self.multi_current_pos[hi], dtype=float)
+                       + np.array([0.1 * k, 0.1 * k])
+                       for k in range(1, self.rrt_num_waypoints + 1)]
+            current_rrt_waypoints.append(wps)
+
         for i in range(self.num_agents):
             pos = self.multi_current_pos[i]
             vel = self.multi_current_vel[i]
@@ -281,9 +374,27 @@ class UAVEnv:
             S_obser = self.multi_current_lasers[i] # dim 16
 
             if i != self.num_agents - 1:
-                single_obs = [S_uavi,S_team,S_obser,S_target]
+                # hunter: S_rrt_waypoints = 4 wp × 3 = 12
+                S_rrt = encode_waypoints_for_obs(
+                    current_rrt_waypoints[i],
+                    np.array(pos, dtype=float),
+                    self.length,
+                    num_expected=self.rrt_num_waypoints,
+                )
+                single_obs = [S_uavi, S_team, S_obser, S_target, S_rrt]
             else:
-                single_obs = [S_uavi,S_obser,S_evade_d]
+                # target: S_threat = 3 hunters × 3 = 9
+                hunter_positions = [
+                    np.array(self.multi_current_pos[hi], dtype=float)
+                    for hi in range(n_hunters)
+                ]
+                S_threat = encode_hunter_threat_for_target(
+                    hunter_positions,
+                    np.array(pos, dtype=float),
+                    self.length,
+                    rrt_paths=self.rrt_paths if hasattr(self, 'rrt_paths') else None,
+                )
+                single_obs = [S_uavi, S_obser, S_evade_d, S_threat]
             _single_obs = list(itertools.chain(*single_obs))
             total_obs.append(_single_obs)
 
@@ -978,7 +1089,6 @@ class UAVEnv:
         mu5 = 0.1 # 避障 0.2
         d_capture = 0.3
         d_limit = 0.55 # 0.75
-        # 获取当前无人机位置
         current_positions = np.array(self.multi_current_pos[:self.num_agents - 1])
         target_position = self.multi_current_pos[-1]
         ## 1 reward for single rounding-up-UAVs:
@@ -992,10 +1102,7 @@ class UAVEnv:
 
             cos_v_d = np.dot(vel,dire_vec)/(v_i*d + 1e-3)
             r_near = abs(2*v_i/self.v_max)*cos_v_d
-            # r_near = min(abs(v_i/self.v_max)*1.0/(d + 1e-5),10)/5
-            # print('add 1', mu1 * r_near)
-            rewards[i] += mu1 * r_near # TODO: if not get nearer then receive negative reward
-            # rewards[i] -= 0.15 * d # 0516里作为测试加入
+            rewards[i] += mu1 * r_near
 
         ## 2 collision reward for all UAVs:
         for i in range(self.num_agents):
@@ -1005,64 +1112,63 @@ class UAVEnv:
                 lasers = self.multi_current_lasers[i]
                 r_safe = (min(lasers) - self.L_sensor - 0.1)/self.L_sensor
 
-            # print('add 2', mu2 * r_safe)
             rewards[i] += mu2 * r_safe
         ws_model = self.get_ws_model()
         vo_rewards = self.VO_reward(self.multi_current_pos, self.multi_current_vel, ws_model,
-                                        dist_threshold=0.7) # 0.5
+                                        dist_threshold=0.7)
         vo_rewards_float = [float(x) for x in vo_rewards[0:3]]
-        # print("VO rewards =", vo_rewards)
         rewards[0:3] += mu5 * np.array(vo_rewards_float)
-        # print("rewards =", rewards)
-        # for i in range(self.num_agents - 1):
-        #
-        #     last_distance = np.linalg.norm(last_p[i] - target_position)
-        #     current_distance = np.linalg.norm(self.multi_current_pos[i] - target_position)
-        #     r_a[i] += mu3 * 10 * (last_distance - current_distance)
 
-        # print(" with VO rewards =", rewards)
+        ## ===== 2.5 RRT* 路径跟随奖励 =====
+        for i in range(self.num_agents - 1):
+            pos = np.array(self.multi_current_pos[i], dtype=float)
+            vel = np.array(self.multi_current_vel[i], dtype=float)
+            v_i = np.linalg.norm(vel)
+            rrt_reward = 0.0
 
-        ## 避障 TEST2
-        # for i in range(self.num_agents-1):
-        #     if IsCollied[i]:
-        #         r_vo = vo_rewards[i]
-        #     else:
-        #         r_vo = 0
-        #     rewards[i] += r_vo
-        # 速度奖励 弃用
-        # for i in range(self.num_agents-1):
-        #     if IsCollied[i]:
-        #         target_speed = 0  # 目标速度为最大速度的 80%
-        #     else:
-        #         target_speed = self.v_max * 0.8  # 目标速度为最大速度的 80%
-        #     vel = self.multi_current_vel[i]
-        #     speed = np.linalg.norm(vel)  # 计算速度的大小
-        #
-        #
-        #
-        #     tolerance = 0.02  # 允许的速度误差范围
-        #
-        #         # 奖励函数：速度接近目标速度时奖励更高，过高或过低的速度会受到惩罚
-        #     if abs(speed - target_speed) <= tolerance:
-        #         speed_reward = 1.0  # 完全匹配目标速度的奖励
-        #     elif speed < target_speed:
-        #         speed_reward = -0.5 * (target_speed - speed)  # 速度过低的惩罚
-        #     else:
-        #         speed_reward = -0.5 * (speed - target_speed)  # 速度过高的惩
-        #     rewards[i] += speed_reward
+            if (hasattr(self, 'rrt_paths')
+                    and i < len(self.rrt_paths)
+                    and self.rrt_paths[i]
+                    and len(self.rrt_paths[i]) >= 2):
+                path = self.rrt_paths[i]
+                path_arr = np.array(path)
+                seg_lens = np.linalg.norm(np.diff(path_arr, axis=0), axis=1)
+                cum_lens = np.concatenate([[0.0], np.cumsum(seg_lens)])
+                total_L = cum_lens[-1] if cum_lens[-1] > 1e-9 else 1.0
 
-        # 接近目标奖励
-        # for i in range(self.num_agents - 1):
-        #
-        #     last_distance = np.linalg.norm(last_pos[i] - target_position)
-        #     # print(f"agt last dis {i}", last_distance)
-        #     current_distance = np.linalg.norm(self.multi_current_pos[i] - target_position)
-        #
-        #     rewards[i] += 0.1*(last_distance - current_distance)
-        #     print(f"agt {i}", rewards[i])
-        #     # print(f"agt current dis {i}", 100*(last_distance - current_distance))
+                nearest_idx = int(np.argmin(np.linalg.norm(path_arr - pos, axis=1)))
+                s_current = cum_lens[min(nearest_idx, len(cum_lens) - 1)]
 
+                # 2.5.a 沿路径推进奖励
+                progress = s_current / total_L
+                delta_progress = progress - self.rrt_last_progress[i]
+                self.rrt_last_progress[i] = progress
+                r_progress = 5.0 * np.clip(delta_progress, -0.1, 0.1)
 
+                # 2.5.b 速度方向与路径切向对齐奖励
+                if nearest_idx < len(path) - 1 and v_i > 1e-4:
+                    tangent = path_arr[nearest_idx + 1] - path_arr[nearest_idx]
+                    tangent_norm = np.linalg.norm(tangent)
+                    if tangent_norm > 1e-6:
+                        tangent_unit = tangent / tangent_norm
+                        vel_unit = vel / v_i
+                        cos_align = np.dot(tangent_unit, vel_unit)
+                        r_track = (v_i / self.v_max) * cos_align
+                    else:
+                        r_track = 0.0
+                else:
+                    r_track = 0.0
+
+                # 2.5.c 偏离路径惩罚
+                nearest_pt = path_arr[nearest_idx]
+                deviation = np.linalg.norm(pos - nearest_pt)
+                r_dev = -2.0 * max(0.0, deviation - 0.08)
+
+                rrt_reward = (self.mu_rrt_track * r_track
+                              + self.mu_rrt_progress * r_progress
+                              + r_dev)
+
+            rewards[i] += self.mu_rrt * rrt_reward
 
         ## 3 multi-stage's reward for rounding-up-UAVs
         p0 = self.multi_current_pos[0]
@@ -1081,22 +1187,25 @@ class UAVEnv:
         Sum_last_d = sum(last_d)
         # 3.1 reward for target UAV:
         rewards[-1] += np.clip(2 * (Sum_d - Sum_last_d),-2,2)
-        # print(rewards[-1])
-        # 3.2 stage-1 track
-
-        # if Sum_d >= d_limit and all(d >= d_capture for d in [d1, d2, d3]):
 
         if Sum_S > S4 and Sum_d >= d_limit and all(d >= d_capture for d in [d1, d2, d3]):
             r_track = - Sum_d/max([d1,d2,d3])
             rewards[0:3] += mu3*r_track
-        # 3.3 stage-2 encircle
         elif Sum_S > S4 and (Sum_d < d_limit or any(d >= d_capture for d in [d1, d2, d3])):
             r_encircle = -1/3*np.log(Sum_S - S4 + 1)
             rewards[0:3] += mu3*r_encircle
-        # 3.4 stage-3 capture
         elif Sum_S == S4 and any(d > d_capture for d in [d1,d2,d3]):
             r_capture = np.exp((Sum_last_d - Sum_d)/(3*self.v_max))
             rewards[0:3] += mu3*r_capture
+
+        ## ===== 3.5 捕获率里程碑奖励 =====
+        avg_d = Sum_d / 3.0
+        if not self.capture_milestone_achieved[0] and avg_d < self.capture_d_milestone_1:
+            rewards[0:3] += self.capture_milestone_reward
+            self.capture_milestone_achieved[0] = True
+        if not self.capture_milestone_achieved[1] and avg_d < self.capture_d_milestone_2:
+            rewards[0:3] += 1.5 * self.capture_milestone_reward
+            self.capture_milestone_achieved[1] = True
 
         ## 4 finish rewards
         if Sum_S == S4 and all(d <= d_capture for d in [d1,d2,d3]):

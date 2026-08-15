@@ -1,0 +1,19 @@
+run_prefix: 0815_170641_stage1
+stage: stage1
+alpha: 1e-05
+beta: 0.001
+RRT* robot_radius: 0.06
+RRT* max_iter: 300
+RRT* step_size: 0.12
+RRT* goal_radius: 0.15
+RRT* neighbor_radius: 0.25
+RRT* encircle_radius: 0.25
+RRT* num_waypoints: 4
+mu_rrt (total weight): 0.5
+mu_rrt_track (alignment): 0.4
+mu_rrt_progress (progress): 0.6
+capture_milestone_reward: 2.0
+capture_d_milestone_1: 0.5
+capture_d_milestone_2: 0.35
+Obs dim agent: 38, target: 32
+reward components: mu1=0.9, mu2=0.2, mu3=0.0(stage1), mu4=10, mu5=0.1, mu_rrt=0.5

@@ -1,0 +1,17 @@
+{
+  "stage": "stage1",
+  "run_prefix": "0815_170641_stage1",
+  "scenario_name": "0815_170641_stage1_UAV_Round_up",
+  "base_chkpt_parent": "tmp_avoid_dynamic/maddpgwithatt_rrt2D",
+  "chkpt_dir_with_sep": "tmp_avoid_dynamic/maddpgwithatt_rrt2D/",
+  "model_save_dir": "tmp_avoid_dynamic/maddpgwithatt_rrt2D/0815_170641_stage1_UAV_Round_up",
+  "log_dir": "log_arvp_rrt2D/0815_170641_stage1_arvp_rrt2D",
+  "runs_parent_dir": "runs/0815_170641_stage1_arvp_rrt2D",
+  "reward_png_name": "0815_170641_stage1_stage1_arvp_rrt2D_reward.png",
+  "obs_agt_dim": 38,
+  "obs_tar_dim": 32,
+  "n_agents": 4,
+  "n_actions": 2,
+  "method": "方案二: RRT* 2D 采样路径作为专家轨迹的演示增强 (Demonstration-Augmented RL)",
+  "created_at": "2026-08-15T17:06:41"
+}
