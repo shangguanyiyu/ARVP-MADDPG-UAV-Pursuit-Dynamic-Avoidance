@@ -18,6 +18,8 @@ from RVO import distance, in_between
 from math import cos, sin, tan, atan2, asin
 import time
 
+from RRT_planner import RRTPlanner2D
+
 from math import pi as PI
 
 class UAVEnv:
@@ -58,6 +60,21 @@ class UAVEnv:
             'target': spaces.Box(low=-np.inf, high=np.inf, shape=(23,))
         }
 
+        # ---------- RRT 动态取样规划器 (NoStage1) ----------
+        self.rrt_enabled = True
+        self.rrt_planner = RRTPlanner2D(
+            bounds=[0.0, self.length, 0.0, self.length],
+            max_iter=150,            # 2x2小场景，150次足够
+            step_size=0.08,          # 步长稍大，加快收敛
+            goal_sample_rate=0.4,    # 目标采样概率提高，加速到锚点
+            robot_radius=0.1
+        )
+        self.rrt_capture_radius = 0.36  # 锚点圆周半径，略大于d_capture=0.3
+        self.rrt_look_ahead = 4 * self.v_max * self.time_step  # 前瞻~4步距离
+        # 存储每步的RRT参考点，用于奖励计算和日志
+        self.rrt_reference_points = [None] * (self.num_agents - 1)
+        self.rrt_anchor_points = [None] * (self.num_agents - 1)
+
     def get_ws_model(self):
         """
         构造 ws_model，包含机器人半径和所有障碍物的信息。
@@ -69,6 +86,46 @@ class UAVEnv:
             ]
         }
         return ws_model
+
+    def compute_rrt_references(self):
+        """
+        为每架围捕无人机执行RRT动态取样：
+        1. 根据目标当前位置分配三机围捕锚点（120°均匀分布）
+        2. 对每架无人机，从当前位置规划到对应锚点的RRT路径
+        3. 取路径上的前瞻点（短截动态取样）作为参考点，存入self.rrt_reference_points
+        """
+        if not self.rrt_enabled:
+            return
+        target_pos = self.multi_current_pos[-1]
+        drone_positions = [self.multi_current_pos[i] for i in range(self.num_agents - 1)]
+        # 障碍物列表和半径
+        obstacles = [list(obs.position) for obs in self.obstacles]
+        obstacle_radii = [obs.radius for obs in self.obstacles]
+        # 分配围捕锚点
+        anchors = RRTPlanner2D.allocate_anchors(
+            target_pos, drone_positions, capture_radius=self.rrt_capture_radius
+        )
+        self.rrt_anchor_points = anchors
+        # 对每架无人机规划RRT并取样参考点
+        for i in range(self.num_agents - 1):
+            start = list(drone_positions[i])
+            goal = list(anchors[i])
+            # 如果距离已经很近，参考点直接用锚点
+            if np.linalg.norm(np.array(start) - np.array(goal)) <= self.rrt_look_ahead:
+                self.rrt_reference_points[i] = list(goal)
+                continue
+            path = self.rrt_planner.plan(start, goal, obstacles, obstacle_radii)
+            if path is not None:
+                wp = RRTPlanner2D.extract_reference(path, start, self.rrt_look_ahead)
+                self.rrt_reference_points[i] = wp
+            else:
+                # RRT规划失败时，退化为直线方向上的点（避障不保证，但至少有方向引导）
+                direction = np.array(goal) - np.array(start)
+                dist = np.linalg.norm(direction) + 1e-8
+                step_len = min(self.rrt_look_ahead, dist)
+                fallback = np.array(start) + direction / dist * step_len
+                self.rrt_reference_points[i] = [float(fallback[0]), float(fallback[1])]
+
     def reset(self):
         # SEED = random.randint(1,1000)
         SEED = int(time.time() * 1000) % 1000
@@ -89,6 +146,10 @@ class UAVEnv:
 
         # update lasers
         self.update_lasers_isCollied_wrapper()
+        # ---- RRT reference reset，然后基于初始状态算一次 ----
+        self.rrt_reference_points = [None] * (self.num_agents - 1)
+        self.rrt_anchor_points = [None] * (self.num_agents - 1)
+        self.compute_rrt_references()
         ## multi_obs is list of agent_obs, state is multi_obs after flattenned
         multi_obs = self.get_multi_obs()
 
@@ -171,6 +232,8 @@ class UAVEnv:
                     obs.velocity[dim] *= -1
 
         Collided = self.update_lasers_isCollied_wrapper()
+        # ------- RRT 动态取样：每步重规划，获取参考点（供奖励使用） -------
+        self.compute_rrt_references()
         rewards, dones = self.cal_rewards_dones(Collided, last_d2target, self.last_pos)
         multi_next_obs = self.get_multi_obs()
         # sequence above can't be disrupted
@@ -231,6 +294,8 @@ class UAVEnv:
                     obs.velocity[dim] *= -1
 
         Collided = self.update_lasers_isCollied_wrapper()
+        # ------- RRT 动态取样：每步重规划（step_2版本） -------
+        self.compute_rrt_references()
         rewards, dones = self.cal_rewards_dones(Collided, last_d2target, self.last_pos)
         multi_next_obs = self.get_multi_obs()
         multi_pos = self.multi_current_pos
@@ -973,7 +1038,7 @@ class UAVEnv:
         rewards = np.zeros(self.num_agents)
         mu1 = 0.9 # r_near 0.9
         mu2 = 0.2# r_safe  0.4
-        mu3 = 0.0# r_multi_stage 第一阶段0.0，第二阶段0.4
+        mu3 = 0.4# r_multi_stage 第一阶段0.0，第二阶段0.4 (NoStage1: 直接围捕)
         mu4 = 10 # r_finish 10
         mu5 = 0.1 # 避障 0.2
         d_capture = 0.3
@@ -1103,6 +1168,27 @@ class UAVEnv:
             print('add 4', mu4*10)
             rewards[0:3] += mu4*10
             dones = [True] * self.num_agents
+
+        ## 5 RRT 参考点对齐奖励（动态取样引导）
+        mu6 = 0.8  # RRT引导权重（NoStage1: 围捕时重要）
+        for i in range(3):
+            ref = self.rrt_reference_points[i]
+            if ref is None:
+                continue
+            pos = self.multi_current_pos[i]
+            vel = self.multi_current_vel[i]
+            v_i = np.linalg.norm(vel)
+            rrt_vec = np.array(ref) - np.array(pos)
+            d_rrt = np.linalg.norm(rrt_vec) + 1e-8
+            # 速度方向与参考方向的余弦对齐度
+            cos_v_rrt = np.dot(vel, rrt_vec) / (v_i * d_rrt + 1e-3)
+            # 越接近参考方向、速度越高，奖励越大；反向走会受惩罚
+            r_rrt = (2 * v_i / self.v_max) * cos_v_rrt
+            # 越接近目标锚点，奖励的"要求"越高——距离越近，对齐项乘子降低但距离项出现
+            dist_to_anchor = np.linalg.norm(np.array(pos) - np.array(self.rrt_anchor_points[i]))
+            dist_bonus = max(0.0, 0.2 - dist_to_anchor) * 5.0  # 锚点距离<0.2时额外正奖励
+            rewards[i] += mu6 * (r_rrt + dist_bonus)
+
         return rewards,dones
 
     def update_lasers_isCollied_wrapper(self):
