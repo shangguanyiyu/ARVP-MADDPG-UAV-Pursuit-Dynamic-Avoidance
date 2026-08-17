@@ -1,0 +1,8 @@
+Branch: trae/arvp_rrt2DNoStage1 (NoStage1 + RRT2D dynamic sampling)
+mu3: 0.4 (直接围捕，无stage1预训练)
+RRT enabled: True
+RRT capture radius: 0.36
+RRT look ahead: 0.2400
+alpha: 1e-05
+beta: 0.001
+N_GAMES: 5000
