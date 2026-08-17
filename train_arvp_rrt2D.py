@@ -82,6 +82,10 @@ if __name__ == '__main__':
     N_GAMES = 5000
     MAX_STEPS = 110
     PRINT_INTERVAL = 200  # 每200个episode打印训练状态
+    # ---------- Resume 模式 ----------
+    # 设为 0 表示从0开始；设为 >0 表示从该 episode 继续（需checkpoint存在）
+    RESUME_FROM_EP = int(os.environ.get('RESUME_FROM_EP', 0))
+    RESUME_MODE = RESUME_FROM_EP > 0
     total_steps = 0
     score_history = []
     target_score_history = []
@@ -107,9 +111,23 @@ if __name__ == '__main__':
     print('  Checkpoint  :', chkpt_dir)
     print('  Log dir     :', log_dir)
     print('  RRT enabled :', env.rrt_enabled)
+    if RESUME_MODE:
+        print('  RESUME MODE : 从 ep', RESUME_FROM_EP, '继续训练（加载checkpoint）')
+        maddpg_agents.load_checkpoint()
+        # 从之前checkpoint估算best_score（取最近一次保存的近似值，避免重复保存）
+        # 读hyperparameters.txt 中的 best_score（如果有）
+        best_score_path = os.path.join(chkpt_dir, 'best_score.txt')
+        if os.path.exists(best_score_path):
+            with open(best_score_path) as f:
+                best_score = float(f.read().strip())
+            print(f'  Loaded best_score = {best_score:.2f} from {best_score_path}')
+        else:
+            # 未记录best_score时给一个较低值，允许首次保存覆盖
+            best_score = -1e9
+            print(f'  best_score not recorded, using {best_score}')
     print('============================================================')
 
-    i = 0
+    i = RESUME_FROM_EP  # resume时从断点继续；否则从0
     while i < N_GAMES:
         with tqdm(total=BATCH_SIZE, desc=f"Batch Progress (Total {i}/{N_GAMES})", unit="episode",
                   disable=True) as pbar:
@@ -244,6 +262,9 @@ if __name__ == '__main__':
                            f'saving models & running quick evaluate...')
                 maddpg_agents.save_checkpoint()
                 best_score = avg_score
+                # 保存 best_score 以便 resume 时恢复
+                with open(os.path.join(chkpt_dir, 'best_score.txt'), 'w') as f:
+                    f.write(f'{best_score:.6f}')
                 # 评估10秒（与原训练脚本保持一致）
                 process = subprocess.Popen(['python', 'evaluate_arvp.py'])
                 time.sleep(10)
