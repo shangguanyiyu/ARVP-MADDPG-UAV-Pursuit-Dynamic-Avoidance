@@ -3,3 +3,28 @@
 [INFO] checkpoint dir = /workspace/tmp_noise/maddpgwithatt  (含 scenario=UAV_Round_up 子目录)
 [INFO] no pre-trained checkpoint loaded: FileNotFoundError: [Errno 2] No such file or directory: '/workspace/tmp_noise/maddpgwithatt/UAV_Round_up/agent_0_actor'
 ----training start----
+第 89 回合, 总成功率: 4.44%
+Batch 1 done. avg_score=-392.29, avg_target=-39.42, total_steps=10846
+[INFO] checkpoint verified @ /workspace/tmp_noise/maddpgwithatt/UAV_Round_up: 16 files, e.g. agent_1_target_actor
+New best avg score -392.29 > previous best -1000.00. (saved=True)
+第 179 回合, 总成功率: 7.22%
+第 189 回合, 总成功率: 7.89%
+Batch 2 done. avg_score=-372.79, avg_target=-33.51, total_steps=21253
+[INFO] checkpoint verified @ /workspace/tmp_noise/maddpgwithatt/UAV_Round_up: 16 files, e.g. agent_1_target_actor
+New best avg score -372.79 > previous best -392.29. (saved=True)
+第 269 回合, 总成功率: 7.41%
+Batch 3 done. avg_score=-413.11, avg_target=-38.31, total_steps=32050
+[INFO] checkpoint verified @ /workspace/tmp_noise/maddpgwithatt/UAV_Round_up: 16 files, e.g. agent_1_target_actor
+Batch 4 done. avg_score=-424.81, avg_target=-36.58, total_steps=42914
+[INFO] checkpoint verified @ /workspace/tmp_noise/maddpgwithatt/UAV_Round_up: 16 files, e.g. agent_1_target_actor
+第 439 回合, 总成功率: 6.82%
+第 449 回合, 总成功率: 6.89%
+第 489 回合, 总成功率: 7.35%
+Batch 5 done. avg_score=-349.21, avg_target=-35.87, total_steps=53031
+[INFO] checkpoint verified @ /workspace/tmp_noise/maddpgwithatt/UAV_Round_up: 16 files, e.g. agent_1_target_actor
+New best avg score -349.21 > previous best -372.79. (saved=True)
+Batch 6 done. avg_score=-419.90, avg_target=-41.73, total_steps=63764
+[INFO] checkpoint verified @ /workspace/tmp_noise/maddpgwithatt/UAV_Round_up: 16 files, e.g. agent_1_target_actor
+Batch 7 done. avg_score=-408.24, avg_target=-37.47, total_steps=74424
+[INFO] checkpoint verified @ /workspace/tmp_noise/maddpgwithatt/UAV_Round_up: 16 files, e.g. agent_1_target_actor
+第 729 回合, 总成功率: 7.40%
