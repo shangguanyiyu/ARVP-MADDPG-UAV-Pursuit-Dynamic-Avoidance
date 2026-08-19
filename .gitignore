@@ -1,0 +1,52 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.installed.cfg
+*.egg
+
+# === Virtual environments ===
+venv/
+env/
+.venv/
+ENV/
+
+# === IDE ===
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# === Model checkpoints / training artifacts (do NOT track on trae/arvpNoise) ===
+tmp/
+tmp_*/
+tmp_test/
+tmp_avoid_dynamic/
+runs/
+runs_noise/
+*.pt
+*.pth
+*.ckpt
+hyperparameters.txt
+
+# === Training outputs (logs, curves) — kept selectively via -f rules below ===
+*.log
+training_log*.txt
+reward_curves*.png
+# 但保留本仓库产物:让训练产生的日志/曲线能被 git add -f 显式提交
+!training_log_noise.txt
+!reward_curves_noise.png
+!images_noise/
+
+# === TensorBoard event files ===
+events.out.tfevents.*
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === Misc ===
+.score_history.csv
