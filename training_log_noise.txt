@@ -28,3 +28,8 @@ Batch 6 done. avg_score=-419.90, avg_target=-41.73, total_steps=63764
 Batch 7 done. avg_score=-408.24, avg_target=-37.47, total_steps=74424
 [INFO] checkpoint verified @ /workspace/tmp_noise/maddpgwithatt/UAV_Round_up: 16 files, e.g. agent_1_target_actor
 第 729 回合, 总成功率: 7.40%
+Batch 8 done. avg_score=-405.38, avg_target=-37.09, total_steps=85094
+[INFO] checkpoint verified @ /workspace/tmp_noise/maddpgwithatt/UAV_Round_up: 16 files, e.g. agent_1_target_actor
+第 889 回合, 总成功率: 7.64%
+Batch 9 done. avg_score=-404.31, avg_target=-37.61, total_steps=95707
+[INFO] checkpoint verified @ /workspace/tmp_noise/maddpgwithatt/UAV_Round_up: 16 files, e.g. agent_1_target_actor
