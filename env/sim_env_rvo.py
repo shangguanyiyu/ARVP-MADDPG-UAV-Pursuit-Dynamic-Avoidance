@@ -5,7 +5,6 @@ import matplotlib.transforms as transforms
 import matplotlib.cm as cm
 import matplotlib.image as mpimg
 from gymnasium import spaces
-from torchaudio.functional import speed
 
 from math_tool import *
 import matplotlib.backends.backend_agg as agg
@@ -50,12 +49,32 @@ class UAVEnv:
             'agent_1': spaces.Box(low=-np.inf, high=np.inf, shape=(2,)),
             'agent_2': spaces.Box(low=-np.inf, high=np.inf, shape=(2,)),
             'target': spaces.Box(low=-np.inf, high=np.inf, shape=(2,))
-            } # action represents [a_x,a_y]
+        } # action represents [a_x,a_y]
+        # === 声呐信号模拟参数 (trae/arvpNoise 新增) ===
+        # 参考: 真实声呐/飞行器辐射噪声是多频带谐波叠加,且与距离成 ~1/r 衰减、与方向呈 cos 增益
+        # 围捕者(追捕 UAV)接收 16 个时域采样点,送入 FFT+GRU+Attention 网络进行特征分离
+        self.n_signal_samples = 16              # 每个 step 内采样的时域点数
+        self.signal_fs = self.n_signal_samples / self.time_step  # 等效采样率 ≈ 32 Hz, Nyquist=16Hz
+        # 特征 1: 被围捕目标辐射 (低频段 + 谐波结构, 模拟旋翼低频特征)
+        self.target_freqs  = np.array([2.0, 5.0, 8.0])  # Hz, 区别于障碍物
+        self.target_amps   = np.array([1.0, 0.7, 0.5])
+        self.target_phases  = np.array([0.0, 1.0, 2.0])
+        # 特征 2: 动态障碍物辐射 (高频段 + 不同谐波结构, 模拟不同机型)
+        self.obstacle_freqs = np.array([3.0, 7.0, 11.0])
+        self.obstacle_amps  = np.array([1.0, 0.6, 0.4])
+        self.obstacle_phases = np.array([0.5, 1.5, 2.5])
+        # 信号物理参数
+        self.signal_decay_length = 1.0   # 距离衰减特征长度 (1/r 型)
+        self.signal_noise_std     = 0.05  # 背景高斯白噪声标准差
+        self.target_source_amp    = 1.0   # 目标信号源强度
+        self.obstacle_source_amp  = 0.8   # 障碍物信号源强度
+        # 预计算时域采样点 (相对 step 起点的时间偏移)
+        self._t_samples = (np.arange(self.n_signal_samples) + 0.5) * (self.time_step / self.n_signal_samples)
         self.observation_space = {
-            'agent_0': spaces.Box(low=-np.inf, high=np.inf, shape=(26,)),
-            'agent_1': spaces.Box(low=-np.inf, high=np.inf, shape=(26,)),
-            'agent_2': spaces.Box(low=-np.inf, high=np.inf, shape=(26,)),
-            'target': spaces.Box(low=-np.inf, high=np.inf, shape=(23,))
+            'agent_0': spaces.Box(low=-np.inf, high=np.inf, shape=(26 + self.n_signal_samples,)),
+            'agent_1': spaces.Box(low=-np.inf, high=np.inf, shape=(26 + self.n_signal_samples,)),
+            'agent_2': spaces.Box(low=-np.inf, high=np.inf, shape=(26 + self.n_signal_samples,)),
+            'target': spaces.Box(low=-np.inf, high=np.inf, shape=(23,))  # 目标(逃跑者)无信号感知
         }
 
     def get_ws_model(self):
@@ -251,6 +270,52 @@ class UAVEnv:
             total_obs.append(S_uavi)
         return total_obs
 
+    def compute_signal_features(self, agent_idx):
+        """
+        声呐信号模拟 (trae/arvpNoise 新增):
+        - 围捕者(agent_idx < num_agents-1)接收来自「目标特征1」与「动态障碍特征2」叠加的时域信号
+        - 信号强度随距离衰减 (~1/sqrt(1+r/L)),方向上呈余弦增益 (前方强、后方弱)
+        - 多个信号源在线性域叠加 (声波叠加原理) + 背景高斯白噪声
+        - 返回长度 n_signal_samples 的时域采样向量
+        - 注意: 本函数不涉及任何 reward, 仅产生观测特征
+        """
+        pos = np.asarray(self.multi_current_pos[agent_idx], dtype=np.float64)
+        vel = np.asarray(self.multi_current_vel[agent_idx], dtype=np.float64)
+        speed = float(np.linalg.norm(vel))
+        # 用速度方向作为传感器朝向;静止时退化为全向 (heading=0)
+        heading = float(np.arctan2(vel[1], vel[0])) if speed > 1e-3 else 0.0
+        t = self._t_samples  # [N]
+        signal = np.zeros(self.n_signal_samples, dtype=np.float64)
+
+        # --- 特征 1: 被围捕目标辐射 ---
+        target_pos = np.asarray(self.multi_current_pos[-1], dtype=np.float64)
+        diff_t = target_pos - pos
+        r_t = float(np.linalg.norm(diff_t)) + 1e-3
+        bearing_t = float(np.arctan2(diff_t[1], diff_t[0])) - heading
+        # 方向增益: 0.5 + 0.5*cos(bearing) ∈ [0,1], 前方=1, 后方=0
+        dir_gain_t = 0.5 + 0.5 * np.cos(bearing_t)
+        # 距离衰减: 2D 声学近似 ~ 1/sqrt(1+r/L)
+        dist_atten_t = 1.0 / np.sqrt(1.0 + r_t / self.signal_decay_length)
+        amp_t = self.target_source_amp * dist_atten_t * dir_gain_t
+        for f, a, p in zip(self.target_freqs, self.target_amps, self.target_phases):
+            signal = signal + amp_t * a * np.sin(2.0 * np.pi * f * t + p)
+
+        # --- 特征 2: 动态障碍物辐射 (多个障碍源逐一叠加) ---
+        for obs in self.obstacles:
+            obs_pos = np.asarray(obs.position, dtype=np.float64)
+            diff_o = obs_pos - pos
+            r_o = float(np.linalg.norm(diff_o)) + 1e-3
+            bearing_o = float(np.arctan2(diff_o[1], diff_o[0])) - heading
+            dir_gain_o = 0.5 + 0.5 * np.cos(bearing_o)
+            dist_atten_o = 1.0 / np.sqrt(1.0 + r_o / self.signal_decay_length)
+            amp_o = self.obstacle_source_amp * dist_atten_o * dir_gain_o
+            for f, a, p in zip(self.obstacle_freqs, self.obstacle_amps, self.obstacle_phases):
+                signal = signal + amp_o * a * np.sin(2.0 * np.pi * f * t + p)
+
+        # --- 背景噪声 ---
+        signal = signal + np.random.normal(0.0, self.signal_noise_std, self.n_signal_samples)
+        return signal  # [n_signal_samples]
+
     def get_multi_obs(self):
         total_obs = []
         single_obs = []
@@ -281,7 +346,9 @@ class UAVEnv:
             S_obser = self.multi_current_lasers[i] # dim 16
 
             if i != self.num_agents - 1:
-                single_obs = [S_uavi,S_team,S_obser,S_target]
+                # 围捕者额外获取声呐信号特征 (目标特征1 + 障碍特征2 的叠加时域采样)
+                S_signal = self.compute_signal_features(i).tolist()  # dim n_signal_samples
+                single_obs = [S_uavi,S_team,S_obser,S_target,S_signal]
             else:
                 single_obs = [S_uavi,S_obser,S_evade_d]
             _single_obs = list(itertools.chain(*single_obs))
