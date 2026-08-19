@@ -69,7 +69,8 @@ def save_image(env_render, filename):
 
 def main(n_games=5000, batch_episodes=100, max_steps=110,
          alpha=0.0001, beta=0.001, evaluate=False,
-         chkpt_dir='tmp_noise/maddpgwithatt/'):
+         chkpt_dir='tmp_noise/maddpgwithatt/',
+         signal_hidden=32, learn_every=20, per_batch=128):
     log_fp = open(LOG_FILE, 'a', buffering=1)
     sys.stdout = Tee(sys.__stdout__, log_fp)
     sys.stderr = Tee(sys.__stderr__, log_fp)
@@ -77,6 +78,7 @@ def main(n_games=5000, batch_episodes=100, max_steps=110,
     print(f"\n========== 训练启动 {time.strftime('%Y-%m-%d %H:%M:%S')} ==========")
     print(f"N_GAMES={n_games}, MAX_STEPS={max_steps}, BATCH={batch_episodes}")
     print(f"alpha={alpha}, beta={beta}, evaluate={evaluate}")
+    print(f"signal_hidden={signal_hidden}, learn_every={learn_every}, per_batch={per_batch}")
     print(f"chkpt_dir={chkpt_dir}")
 
     env = UAVEnv()
@@ -99,11 +101,11 @@ def main(n_games=5000, batch_episodes=100, max_steps=110,
         actor_dims, critic_dims, n_agents, n_actions,
         alpha=alpha, beta=beta, scenario='UAV_Round_up',
         chkpt_dir=chkpt_dir, obs_agt=obs_agt, obs_tar=obs_tar,
-        n_signal_samples=n_signal_samples, signal_hidden=64, n_hunters=3,
+        n_signal_samples=n_signal_samples, signal_hidden=signal_hidden, n_hunters=3,
     )
 
     memory = PERMultiAgentReplayBuffer(1000000, critic_dims, actor_dims,
-                                       n_actions, n_agents, batch_size=256)
+                                       n_actions, n_agents, batch_size=per_batch)
 
     total_steps = 0
     score_history = []
@@ -121,6 +123,9 @@ def main(n_games=5000, batch_episodes=100, max_steps=110,
         f.write(f'n_signal_samples: {n_signal_samples}\n')
         f.write(f'obs_agt: {obs_agt}\n')
         f.write(f'obs_tar: {obs_tar}\n')
+        f.write(f'signal_hidden: {signal_hidden}\n')
+        f.write(f'learn_every: {learn_every}\n')
+        f.write(f'per_batch: {per_batch}\n')
         f.write(f'target_freqs: {env.target_freqs.tolist()}\n')
         f.write(f'obstacle_freqs: {env.obstacle_freqs.tolist()}\n')
 
@@ -158,7 +163,7 @@ def main(n_games=5000, batch_episodes=100, max_steps=110,
                     if episode_step >= max_steps:
                         dones = [True] * n_agents
                     memory.store_transition(obs, state, actions, rewards, obs_, state_, dones)
-                    if total_steps % 10 == 0 and not evaluate:
+                    if total_steps % learn_every == 0 and not evaluate:
                         maddpg_agents.learn(memory, total_steps, state)
                     obs = obs_
                     score += sum(rewards[0:3])
@@ -224,7 +229,11 @@ if __name__ == '__main__':
     parser.add_argument('--beta', type=float, default=0.001)
     parser.add_argument('--evaluate', action='store_true')
     parser.add_argument('--chkpt_dir', type=str, default='tmp_noise/maddpgwithatt/')
+    parser.add_argument('--signal_hidden', type=int, default=32)
+    parser.add_argument('--learn_every', type=int, default=20)
+    parser.add_argument('--per_batch', type=int, default=128)
     args = parser.parse_args()
     main(n_games=args.n_games, batch_episodes=args.batch, max_steps=args.max_steps,
          alpha=args.alpha, beta=args.beta, evaluate=args.evaluate,
-         chkpt_dir=args.chkpt_dir)
+         chkpt_dir=args.chkpt_dir,
+         signal_hidden=args.signal_hidden, learn_every=args.learn_every, per_batch=args.per_batch)

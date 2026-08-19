@@ -8,6 +8,7 @@ maddpg_noise_att_lstm.py (trae/arvpNoise 新增)
   - 不修改 env 的 reward 机制
 """
 import os
+import numpy as np
 import torch as T
 from torch import nn
 import torch.nn.functional as F
@@ -74,7 +75,7 @@ class MADDPGNoiseWithAttention:
         device = self.agents[0].actor.device
 
         states = T.tensor(states, dtype=T.float).to(device)
-        actions = T.tensor(actions, dtype=T.float).to(device)
+        actions = T.from_numpy(np.array(actions)).float().to(device)
         rewards = T.tensor(rewards, dtype=T.float).to(device)
         states_ = T.tensor(states_, dtype=T.float).to(device)
         dones = T.tensor(dones).to(device)
