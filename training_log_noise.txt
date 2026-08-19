@@ -1,0 +1,5 @@
+[INFO] tensorboard log_dir = /workspace/runs_noise/UAV_training01
+[INFO] actor_dims=[42, 42, 42, 23], critic_dims=149 (hunter obs = 42, target obs = 23)
+[INFO] checkpoint dir = /workspace/tmp_noise/maddpgwithatt  (含 scenario=UAV_Round_up 子目录)
+[INFO] no pre-trained checkpoint loaded: FileNotFoundError: [Errno 2] No such file or directory: '/workspace/tmp_noise/maddpgwithatt/UAV_Round_up/agent_0_actor'
+----training start----
