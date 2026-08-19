@@ -33,3 +33,24 @@ Batch 8 done. avg_score=-405.38, avg_target=-37.09, total_steps=85094
 第 889 回合, 总成功率: 7.64%
 Batch 9 done. avg_score=-404.31, avg_target=-37.61, total_steps=95707
 [INFO] checkpoint verified @ /workspace/tmp_noise/maddpgwithatt/UAV_Round_up: 16 files, e.g. agent_1_target_actor
+Batch 10 done. avg_score=-402.84, avg_target=-33.88, total_steps=106365
+[INFO] checkpoint verified @ /workspace/tmp_noise/maddpgwithatt/UAV_Round_up: 16 files, e.g. agent_1_target_actor
+第 1009 回合, 总成功率: 7.62%
+第 1059 回合, 总成功率: 7.74%
+第 1079 回合, 总成功率: 7.87%
+Batch 11 done. avg_score=-372.78, avg_target=-36.06, total_steps=116744
+[INFO] checkpoint verified @ /workspace/tmp_noise/maddpgwithatt/UAV_Round_up: 16 files, e.g. agent_1_target_actor
+第 1149 回合, 总成功率: 7.74%
+Batch 12 done. avg_score=-426.00, avg_target=-35.92, total_steps=127570
+[INFO] checkpoint verified @ /workspace/tmp_noise/maddpgwithatt/UAV_Round_up: 16 files, e.g. agent_1_target_actor
+Batch 13 done. avg_score=-381.43, avg_target=-36.99, total_steps=137992
+[INFO] checkpoint verified @ /workspace/tmp_noise/maddpgwithatt/UAV_Round_up: 16 files, e.g. agent_1_target_actor
+第 1359 回合, 总成功率: 7.72%
+第 1369 回合, 总成功率: 7.81%
+Batch 14 done. avg_score=-417.71, avg_target=-35.19, total_steps=148725
+[INFO] checkpoint verified @ /workspace/tmp_noise/maddpgwithatt/UAV_Round_up: 16 files, e.g. agent_1_target_actor
+第 1419 回合, 总成功率: 7.89%
+Batch 15 done. avg_score=-400.54, avg_target=-35.15, total_steps=159279
+[INFO] checkpoint verified @ /workspace/tmp_noise/maddpgwithatt/UAV_Round_up: 16 files, e.g. agent_1_target_actor
+Batch 16 done. avg_score=-519.95, avg_target=-37.30, total_steps=170379
+[INFO] checkpoint verified @ /workspace/tmp_noise/maddpgwithatt/UAV_Round_up: 16 files, e.g. agent_1_target_actor
